@@ -16,6 +16,8 @@
               
 
       <div v-if="isRecording">[ recording ]</div>
+      <div v-else-if="isWaitingToRecord">[ record arm: {{recordThreshold}} ]</div>
+
       <div v-if="!isRecording && hasEverRecorded" @click.stop="" class="rangeResetArea">
         <!-- <input @click.stop="" type="range" min="0.1" max="2.0" step="0.01" v-model="playbackRate"> -->
         <Slider v-model="playbackRate"
@@ -29,7 +31,7 @@
     </div> 
 
     <div id="micMonitor" ref="micMonitor" 
-      :class="isRecording && 'recording'"
+      :class="(isRecording || isWaitingToRecord) && 'recording'"
     ></div>
 
     <div id="waveform" ref="waveform" 
@@ -57,17 +59,22 @@ const MIN_ZOOM_LEVEL = 160;
 const MAX_ZOOM_LEVEL = 500;
 const WAVE_HEIGHT_FACTOR = 0.8;
 
+const REGION_RESIZE_SMALL = 0.01;
+const REGION_RESIZE_MEDIUM = 0.1;
+const REGION_RESIZE_LARGE = 0.2;
+let chunks = [];
+
 /*
 TODO:
+  - keys for shrink/expanding start/end of region by small/larger amounts
+
   - sort out damn play/pause/loop of regions inconsistencies
 
   - fucking kbd focus on dropdown for tab/space, can't blur the fucker
 
   - use last audio dev as default, localStorage, not w
 
-  - zoom: this.wavesurfer.zoom(1...1000) ?
-    - use wheel event
-    - prevent leaving region on scroll
+  - prevent leaving region on scroll
 
   - middle click to extend region? 'auxclick' event! (what about trackpad though?)
 
@@ -113,49 +120,15 @@ import Slider from './ui/Slider.vue';
       wavesurfer: null,
       wavesurferMicMonitor: null,
       playbackRate: 1.0,
-      playbackRateSlider: {
-          data: [
-          15,
-          30,
-          45,
-          60,
-          75,
-          90,
-          120
-        ],
-        range: [
-          {
-            label: '15 mins'
-          },
-          {
-            label: '30 mins',
-            isHide: true
-          },
-          {
-            label: '45 mins'
-          },
-          {
-            label: '1 hr',
-            isHide: true
-          },
-          {
-            label: '1 hr 15 mins'
-          },
-          {
-            label: '1 hr 30 mins',
-            isHide: true
-          },
-          {
-            label: '2 hrs'
-          }
-        ]
-      },
+      
       zoomLevel: MIN_ZOOM_LEVEL,
       regionIsLooping: false,
       
-      chunks: [],
+      // chunks: [],
       mediaRecorder: null,
       isRecording: false,
+      isWaitingToRecord: false,
+      recordThreshold: 0.1,
       hasEverRecorded: false,
       recordClass: '',
       lastRegion: null,
@@ -241,27 +214,44 @@ import Slider from './ui/Slider.vue';
 
   methods: {
 
-    record(){
-      this.mediaRecorder.start();
-      console.log("recorder started", this.mediaRecorder.state);
-      this.isRecording = true;
+    recordArm(){
+      this.wavesurferMicMonitor.microphone.start();
+      this.isWaitingToRecord = true;
       this.wavesurfer.stop();
       this.wavesurfer.empty();
       this.wavesurfer.clearRegions();
       // this.wavesurfer.setPlaybackRate(1);
       this.playbackRate = 1;
+    },
+
+    record(){
+      this.mediaRecorder.start();
+      console.log("recorder started", this.mediaRecorder.state);
       this.isRecording = true;
       
-      // start the microphone
-      this.wavesurferMicMonitor.microphone.start();
+      // Started directly, not from record arm (threshold start)
+      if( !this.isWaitingToRecord ){
+        this.wavesurfer.stop();
+        this.wavesurfer.empty();
+        this.wavesurfer.clearRegions();
+        // this.wavesurfer.setPlaybackRate(1);
+        this.playbackRate = 1;
+        this.isRecording = true;
+        // start the microphone
+        this.wavesurferMicMonitor.microphone.start();
+      }
+      this.isWaitingToRecord = false;
+
     },
 
     stopRecord(){
       this.mediaRecorder.stop();
       console.log("recorder stopped", this.mediaRecorder.state);
       this.isRecording = false;
+      this.hasEverRecorded = true;
+      this.isWaitingToRecord = false;
 
-      // start the microphone
+      // stop the microphone
       this.wavesurferMicMonitor.microphone.stop();
     },
 
@@ -358,6 +348,7 @@ import Slider from './ui/Slider.vue';
         region.loop = true;
         this.regionIsLooping = true;
         console.log('region click', region, e);
+        this.lastRegion = region;
       });
 
       
@@ -401,7 +392,7 @@ import Slider from './ui/Slider.vue';
         r.loop = true;
         this.regionIsLooping = true;
 
-        console.log('region-update-end', r.color);
+        console.log('region-update-end', r.start, r.end);
         console.log( Object.values(this.wavesurfer.regions.list) );
         window.r = r;
         this.lastRegion = r;
@@ -445,7 +436,6 @@ import Slider from './ui/Slider.vue';
           // if( rec.state === 'recording' ){
           if( this.isRecording ){
             this.stopRecord();
-            this.hasEverRecorded = true;
           } else {
             this.record();
           }
@@ -500,7 +490,6 @@ import Slider from './ui/Slider.vue';
             // if( rec.state === 'recording' ){
             if( this.isRecording ){
               this.stopRecord();
-              this.hasEverRecorded = true;
             } else {
               this.record();
             }
@@ -519,11 +508,20 @@ import Slider from './ui/Slider.vue';
         case 'KeyR':
           // let region = Object.values(this.wavesurfer.regions.list)[1];
           // region.playLoop();
-          if( this.isRecording ){
-            this.hasEverRecorded = true;
+          // if( this.isRecording ){
+          //   this.hasEverRecorded = true;
+          //   this.stopRecord();
+          // } else {
+          //   this.record();
+          // }
+          if( this.isRecording ) {
             this.stopRecord();
           } else {
-            this.record();
+            if( this.isWaitingToRecord ){
+              this.stopRecord();
+            } else {
+              this.recordArm();
+            }
           }
           break;
 
@@ -544,6 +542,22 @@ import Slider from './ui/Slider.vue';
         case 'Slash':
           this.playbackRate = 1;
           break;
+
+          // Loop ends adjust:
+
+          //  [ , ]  - end adjust
+          case 'BracketLeft': this.adjustRegion(-REGION_RESIZE_SMALL);
+            break;
+          case 'BracketRight': this.adjustRegion(REGION_RESIZE_SMALL);
+            break;
+            
+          //  q, w  - start adjust
+          case 'KeyQ': this.adjustRegion(-REGION_RESIZE_SMALL, 'start');
+            break;
+          case 'KeyW': this.adjustRegion(REGION_RESIZE_SMALL, 'start');
+            break;
+
+
 
         default:
           console.log('Key not handled', e.code, e);          
@@ -594,38 +608,6 @@ import Slider from './ui/Slider.vue';
       this.audioDevices = newDevices;
     },
 
-    // WAD issue: no way to disable monitoring of microphone input! WTF?!
-    // Also docs are pretty minimal, no forums for help, not great search results etc
-    initWadRecorder(){
-      // this.recorder = new Wad({
-      //   source  : 'mic',
-      //   // reverb  : {
-      //   //     wet : .4
-      //   // },
-      //   // filter  : {
-      //   //     type      : 'highpass',
-      //   //     frequency : 500
-      //   // },
-      //   // panning : -.2
-      // });
-      let voice = new Wad({source: 'mic'}); // volume: 1
-      this.poly = new Wad.Poly({
-        // volume: 0,
-        // https://www.npmjs.com/package/web-audio-daw?activeTab=readme
-        recorder: {
-            options: { mimeType : 'audio/webm' },
-            onstop: function(event) {
-                let blob = new Blob(this.recorder.chunks, { 'type' : 'audio/webm;codecs=pcm' });
-                window.open(URL.createObjectURL(blob));
-                // recordings.push(new Wad({source:URL.createObjectURL(blob)}))
-                // recordings.push(blob);
-            }
-        }
-      });
-      this.poly.add(voice);
-      voice.play();
-    },
-
 
     async initRecorder(){
 
@@ -656,16 +638,16 @@ import Slider from './ui/Slider.vue';
         window.rec = this.mediaRecorder;
         
         this.mediaRecorder.onstop = (e) => {
-          const blob = new Blob(this.chunks, { 'type' : 'audio/webm; codecs=pcm' });
+          const blob = new Blob(chunks, { 'type' : 'audio/webm; codecs=pcm' });
           // window.open(URL.createObjectURL(blob));
           // Provide to WaveSurfer
           const audio = new Audio();
           audio.src = URL.createObjectURL(blob);
           this.wavesurferAdd(audio);
-          this.chunks = [];
+          chunks = [];
         }
 
-        this.mediaRecorder.ondataavailable = (e) => this.chunks.push(e.data);
+        this.mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
 
       // })
       // .catch(err => {
@@ -775,7 +757,7 @@ import Slider from './ui/Slider.vue';
         if (file) {
           const reader = new FileReader();
           reader.onload = (ev) => {
-            this.chunks = [];
+            chunks = [];
             const audio = new Audio();
             console.log('result', ev.target.result);
             // Create a Blob providing as first argument a typed array with the file buffer
@@ -839,7 +821,7 @@ import Slider from './ui/Slider.vue';
         //           // const audio = new Audio();
         //           // audio.src = URL.createObjectURL(blob);
         //           // this.wavesurferAdd(audio);
-        //           // this.chunks = [];
+        //           // chunks = [];
         //         };
         //
         //         reader.onerror = () => {
@@ -877,10 +859,64 @@ import Slider from './ui/Slider.vue';
         plugins:       [ MicrophonePlugin.create() ]
       });
 
+      window.mon = this.wavesurferMicMonitor;
+
       this.wavesurferMicMonitor.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
 
-      this.wavesurferMicMonitor.microphone.on('deviceReady', function(stream) {
-          console.log('Device ready!', stream);
+      
+
+      // Nope! None of it works :shrug:
+      // this.wavesurferMicMonitor.on('audioprocess', e => {
+      //   console.log('audioprocess', e);
+      // });
+
+      // this.wavesurferMicMonitor.microphone.on('audioprocess', e => {
+      //   console.log('audioprocess', e);
+      // });
+
+      this.wavesurferMicMonitor.microphone.on('deviceReady', (stream)  => {
+        console.log('Device ready!', stream);
+
+        // Attach awkwardly to audio process event (keeping existing)
+        // const micProc = this.wavesurferMicMonitor.microphone.levelChecker.onaudioprocess;
+        // this.wavesurferMicMonitor.microphone.levelChecker.onaudioprocess = e => {
+        //   micProc(e);
+        //   console.log('proc', e);
+        // };
+
+        this.wavesurferMicMonitor.backend.analyser.fftSize = 64;
+
+        if( this.recordThreshold > 0 ){
+          this.wavesurferMicMonitor.microphone.levelChecker.addEventListener('audioprocess', e => {
+            if( this.isWaitingToRecord ){
+              for (let channel = 0; channel < e.inputBuffer.numberOfChannels; channel++) {
+                const inputData = e.inputBuffer.getChannelData(channel);
+                for (let sample = 0; sample < e.inputBuffer.length; sample++) {
+                  if( Math.abs(inputData[sample]) > this.recordThreshold ){
+                    console.log('data', inputData[sample]);
+                    this.record();
+                    return;
+                  }
+                }
+              }
+            }
+            // console.log('mic audioprocess', e.inputBuffer);
+            // processAudioBuffer(e.inputBuffer);
+            // 
+            // const bufferLength = this.wavesurferMicMonitor.backend.analyser.frequencyBinCount;
+            // const dataArray = new Uint8Array(bufferLength);
+            // this.wavesurferMicMonitor.backend.analyser.getByteTimeDomainData(dataArray);
+            // // console.log(dataArray);
+            // let debugBytes = '';
+            // for(const d of dataArray){
+            //   debugBytes = debugBytes.concat(d.toString());
+            //   debugBytes = debugBytes.concat(",");
+            // }
+            // console.log('d', debugBytes);
+
+          });
+        }
+
       });
       this.wavesurferMicMonitor.microphone.on('deviceError', function(code) {
           console.warn('Device error: ' + code);
@@ -889,11 +925,41 @@ import Slider from './ui/Slider.vue';
     
     },
 
+    adjustRegion(amt, start=undefined){
+      if( !this.lastRegion ) return;
+      this.lastRegion.onResize(amt, start); 
+    },   
 
+    // adjustRegionEnd(amt){
+    //   if( !this.lastRegion ) return;
+    //   this.lastRegion.onResize(amt); 
+    // },   
 
 
   }, // methods
 
+
+}
+
+
+function processAudioBuffer(buf){
+ for (let channel = 0; channel < buf.numberOfChannels; channel++) {
+    const inputData = buf.getChannelData(channel);
+    // const outputData = outputBuffer.getChannelData(channel);
+    // Loop through the 4096 samples
+    for (let sample = 0; sample < buf.length; sample++) {
+      // make output equal to the same as the input
+      // outputData[sample] = inputData[sample];
+      // add noise to each output sample
+      // outputData[sample] += ((Math.random() * 2) - 1) * 0.2;
+      
+      if( Math.abs(inputData[sample]) > 0.3 ){
+        console.log('data', inputData[sample]);
+      }
+
+
+    }
+  }
 
 }
 
@@ -956,6 +1022,24 @@ function bufferToWave(abuffer, offset, len) {
 
 // https://stackoverflow.com/a/48968694
 function saveFile(fileURL, filename) {
+  if (window.navigator.msSaveOrOpenBlob) {
+    window.navigator.msSaveOrOpenBlob(blob, filename);
+  } else {
+    const a = document.createElement('a');
+    document.body.appendChild(a);
+    // const url = window.URL.createObjectURL(blob);
+    a.href = fileURL;
+    a.download = filename;
+    a.click();
+    setTimeout(() => {
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    }, 0)
+  }
+}
+
+// https://stackoverflow.com/a/48968694
+function saveRangeToFile(fileURL, filename, start, end) {
   if (window.navigator.msSaveOrOpenBlob) {
     window.navigator.msSaveOrOpenBlob(blob, filename);
   } else {

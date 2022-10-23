@@ -1,10 +1,10 @@
 <template>
-  <div>
+  <div class="container">
 
     <div id="inputDevices">
         <!-- <span>{{ selectedInputDeviceName }}</span> -->
         <select v-model="selectedInputDevice" @change="inputChanged">
-          <option v-for="(name, id) in audioDevices" :value="id">In: {{ name }}</option>
+          <option :key="id" v-for="(name, id) in audioDevices" :value="id">In: {{ name }}</option>
         </select>  
     </div>
 
@@ -13,10 +13,18 @@
      </div>
 
     <div id="msg">
-      {{ recordingStatus }}      
-      <div @click.stop="rangeClick" class="rangeResetArea">
-        <input @click.stop="" type="range" min="0.1" max="2.0" step="0.01" v-model="playbackRate">
-        <div>{{ Number(playbackRate).toFixed(2) }}</div>
+              
+
+      <div v-if="isRecording">[ recording ]</div>
+      <div v-if="!isRecording && hasEverRecorded" @click.stop="" class="rangeResetArea">
+        <!-- <input @click.stop="" type="range" min="0.1" max="2.0" step="0.01" v-model="playbackRate"> -->
+        <Slider v-model="playbackRate"
+          label="rate"
+          :min="0.13" 
+          :max="2" 
+          :defaultValue="1" 
+          style="height: 30px; width: 400px; margin: 0 auto;" 
+        />
       </div>
     </div> 
 
@@ -30,6 +38,14 @@
       :class="isRecording && 'recording'"
     ></div>
 
+  <div id="instructions">
+    [<strong>tab</strong>]: record toggle, 
+    [<strong>space</strong>]: play toggle,
+    [<strong>s</strong>]: save to file,
+    [<strong>,  .  / </strong>]: slower/faster/reset,
+    [<strong>drag</strong>]: create/adjust loop region,
+
+  </div>
 
   </div>
 </template>
@@ -83,8 +99,13 @@ import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugin/wavesurfer.regions.min.js';
 import MicrophonePlugin from 'wavesurfer.js/dist/plugin/wavesurfer.microphone.min.js';
 
+// import VueSlideBar from 'vue-slide-bar';
+import Slider from './ui/Slider.vue';
+
+
  export default {
   name: 'Main',
+  components: { Slider },
   
   data(){
     return {
@@ -92,6 +113,43 @@ import MicrophonePlugin from 'wavesurfer.js/dist/plugin/wavesurfer.microphone.mi
       wavesurfer: null,
       wavesurferMicMonitor: null,
       playbackRate: 1.0,
+      playbackRateSlider: {
+          data: [
+          15,
+          30,
+          45,
+          60,
+          75,
+          90,
+          120
+        ],
+        range: [
+          {
+            label: '15 mins'
+          },
+          {
+            label: '30 mins',
+            isHide: true
+          },
+          {
+            label: '45 mins'
+          },
+          {
+            label: '1 hr',
+            isHide: true
+          },
+          {
+            label: '1 hr 15 mins'
+          },
+          {
+            label: '1 hr 30 mins',
+            isHide: true
+          },
+          {
+            label: '2 hrs'
+          }
+        ]
+      },
       zoomLevel: MIN_ZOOM_LEVEL,
       regionIsLooping: false,
       
@@ -364,7 +422,7 @@ import MicrophonePlugin from 'wavesurfer.js/dist/plugin/wavesurfer.microphone.mi
       this.wavesurfer.on('region-out', r => {
         const region = this.wavesurfer.regions.list[r.id];
         // this.wavesurfer.play(region);
-        console.log('region out', region.start);
+        // console.log('region out', region.start);
         if( this.regionIsLooping && this.lastRegion && region.id === this.lastRegion.id ){
           this.wavesurfer.setCurrentTime(region.start); //TODO: check if region has changed
         }
@@ -470,7 +528,9 @@ import MicrophonePlugin from 'wavesurfer.js/dist/plugin/wavesurfer.microphone.mi
           break;
 
         case 'KeyS':
+          // TODO: save active region/whole buffer
           const wave =  bufferToWave(this.wavesurfer.backend.buffer, 0, this.wavesurfer.backend.buffer.length);
+          // console.log('save', this.wavesurfer.backend.buffer.length);
           saveFile(wave, dateString() + '.wav');
           // console.log('wave', wave);
           break;
@@ -928,18 +988,23 @@ function dateString(){
 
 <style>
 
-#micMonitor {
-  /* max-width: 100px; */
-  /* width: 90vw;
-  height: 50vh;
-  border: 1px solid red;
-  position: absolute;
-  top: 0;
-  left: 0; */
-  display: none;
+.container {
+  text-align: center;
 }
+
+#micMonitor {
+  max-width: 998px;
+  display: none;
+  text-align: center;
+}
+
+/* #micMonitor > wave{
+} */
+
 #micMonitor.recording {
   display: block;
+  display: inline-block;
+  width: 100%;
 }
 
 #waveform {
@@ -983,18 +1048,26 @@ div.rangeResetArea > div {
   font-size: 1.5rem;
   transition: 0.1s;
   color: #000000; 
-  opacity: 0;
+  /* opacity: 0; */
 }
 
-div.rangeResetArea:hover {
+/* div.rangeResetArea:hover {
   background-color: #ffffff;
-  /* border: 1px solid red; */
-}
+  border: 1px solid red;
+} */
 
 region {
-  border-left: 1px solid #ffffffff !important;
-  border-right: 1px solid #ffffffff !important;
+  border-left: 1px solid #ffffff22 !important;
+  border-right: 1px solid #ffffff22 !important;
 }
+
+/* .wavesurfer-handle.wavesurfer-handle-start {
+  border-left: 1px solid #999999 !important;
+}
+.wavesurfer-handle.wavesurfer-handle-end {
+  border-right: 1px solid #999999 !important;
+}
+*/
 
 .wavesurfer-handle.wavesurfer-handle-start:hover {
   border-left: 1px solid #ffffffff !important;
@@ -1005,7 +1078,8 @@ region {
   border-right: 1px solid #ffffffff !important;
   opacity: 1.0 !important;
   background-color: #ff950022 !important;
-}
+} 
+
 .wavesurfer-handle {
   /* border: 1px solid rgba(0,0,0, 0); */
   transition: 0.17s;
@@ -1069,6 +1143,22 @@ region {
 } */
 
 #inputDevices label span {
+  color: white;
+}
+
+#instructions {
+  position: fixed;
+  bottom: 0;
+  width: 100%;
+  height: 2rem;
+  color: grey;
+  font-size: 10pt;
+}
+#instructions strong{
+  font-weight: bold;
+  text-decoration: underline;
+}
+#instructions:hover {
   color: white;
 }
 </style>

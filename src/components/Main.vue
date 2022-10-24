@@ -37,10 +37,11 @@
     <div id="waveform" ref="waveform" 
       @wheel="handleScrollZoom" 
       @click="handleWaveClick"
+      @auxclick="handleMiddleClick"
       :class="isRecording && 'recording'"
     ></div>
 
-  <div id="instructions">
+  <div id="instructions" v-if="isProduction">
     [<strong>tab</strong>]: record toggle, 
     [<strong>space</strong>]: play toggle,
     [<strong>s</strong>]: save to file,
@@ -64,20 +65,16 @@ const REGION_RESIZE_MEDIUM = 0.1;
 const REGION_RESIZE_LARGE = 0.2;
 let chunks = [];
 
+const env = process.env.NODE_ENV;
+
 /*
 TODO:
-  - keys for shrink/expanding start/end of region by small/larger amounts
-
+  - Microphone monitor does not show selected inputs, defaults to first?
+  
   - sort out damn play/pause/loop of regions inconsistencies
-
   - fucking kbd focus on dropdown for tab/space, can't blur the fucker
-
-  - use last audio dev as default, localStorage, not w
-
   - prevent leaving region on scroll
-
   - middle click to extend region? 'auxclick' event! (what about trackpad though?)
-
 
   NOTE: Device labels will only be shown is MediaStream is already active
   OR 'persistent permissions' have already been granted
@@ -109,6 +106,11 @@ import MicrophonePlugin from 'wavesurfer.js/dist/plugin/wavesurfer.microphone.mi
 // import VueSlideBar from 'vue-slide-bar';
 import Slider from './ui/Slider.vue';
 
+// Keep these out of state?
+let wavesurfer = null;
+let wavesurferMicMonitor = null;
+let mediaRecorder = null;
+
 
  export default {
   name: 'Main',
@@ -117,22 +119,18 @@ import Slider from './ui/Slider.vue';
   data(){
     return {
       // STATE
-      wavesurfer: null,
-      wavesurferMicMonitor: null,
       playbackRate: 1.0,
-      
       zoomLevel: MIN_ZOOM_LEVEL,
       regionIsLooping: false,
-      
-      // chunks: [],
-      mediaRecorder: null,
       isRecording: false,
       isWaitingToRecord: false,
       recordThreshold: 0.1,
       hasEverRecorded: false,
       recordClass: '',
       lastRegion: null,
+      regionCount: 0,
 
+      showSplashScreen: true,
 
       audioDevices: {},
       prevAudioDevices: {}, // for keeping track of added device
@@ -146,9 +144,7 @@ import Slider from './ui/Slider.vue';
         Shift: false,
       },
 
-      // poly: null,
-      // recordings: [],
-
+      isProduction: env !== 'development',
     };
   },
 
@@ -179,13 +175,16 @@ import Slider from './ui/Slider.vue';
     
     playbackRate(v){
       if( v > 0.13 && v < 2.7 ){
-        this.wavesurfer.setPlaybackRate(Number(v));
+        wavesurfer.setPlaybackRate(Number(v));
       } 
     },
 
-    selectedInputDevice(v){
-      this.initRecorder(); // re-initialise audio input
-    },
+    // NO! Watchers are async, which is too hard to debug
+    // So instead: manually run this.initRecorder() after change to input
+    // selectedInputDevice(v){
+    //   console.log('%cWATCHER: selectedInputDevice', 'color: blue');
+    //   this.initRecorder(); // re-initialise audio input
+    // },
 
   },
 
@@ -198,14 +197,14 @@ import Slider from './ui/Slider.vue';
     this.initFileDragDrop();
 
     this.getMediaDevices();
-    // TODO: use new device by default?
+
     navigator.mediaDevices.ondevicechange = (e) => {
-      console.log('media device list CHANGE', e);
-      this.getMediaDevices();
+      // console.log('device change', e);
+      this.getMediaDevices(true); // arg indicates change
     };
 
     this.initWavesurfer();
-    this.initRecorder();
+    // this.initRecorder(); // should happen automatically when getMediaDevices() updates selectedInputDevice (watcher)
 
     this.$refs.waveform.focus();
   }, // mounted
@@ -215,44 +214,45 @@ import Slider from './ui/Slider.vue';
   methods: {
 
     recordArm(){
-      this.wavesurferMicMonitor.microphone.start();
+      wavesurferMicMonitor.microphone.start();
       this.isWaitingToRecord = true;
-      this.wavesurfer.stop();
-      this.wavesurfer.empty();
-      this.wavesurfer.clearRegions();
-      // this.wavesurfer.setPlaybackRate(1);
+      wavesurfer.stop();
+      wavesurfer.empty();
+      wavesurfer.clearRegions();
+      // wavesurfer.setPlaybackRate(1);
       this.playbackRate = 1;
     },
 
     record(){
-      this.mediaRecorder.start();
-      console.log("recorder started", this.mediaRecorder.state);
+      chunks = [];
+      mediaRecorder.start();
+      console.log("recorder started", mediaRecorder.state);
       this.isRecording = true;
       
       // Started directly, not from record arm (threshold start)
       if( !this.isWaitingToRecord ){
-        this.wavesurfer.stop();
-        this.wavesurfer.empty();
-        this.wavesurfer.clearRegions();
-        // this.wavesurfer.setPlaybackRate(1);
+        wavesurfer.stop();
+        wavesurfer.empty();
+        wavesurfer.clearRegions();
+        // wavesurfer.setPlaybackRate(1);
         this.playbackRate = 1;
         this.isRecording = true;
         // start the microphone
-        this.wavesurferMicMonitor.microphone.start();
+        wavesurferMicMonitor.microphone.start();
       }
       this.isWaitingToRecord = false;
 
     },
 
     stopRecord(){
-      this.mediaRecorder.stop();
-      console.log("recorder stopped", this.mediaRecorder.state);
+      mediaRecorder.stop();
+      console.log("recorder stopped", mediaRecorder.state);
       this.isRecording = false;
       this.hasEverRecorded = true;
       this.isWaitingToRecord = false;
 
       // stop the microphone
-      this.wavesurferMicMonitor.microphone.stop();
+      wavesurferMicMonitor.microphone.stop();
     },
 
 
@@ -260,7 +260,7 @@ import Slider from './ui/Slider.vue';
 
     initWavesurfer(){
 
-      this.wavesurfer = WaveSurfer.create({
+      wavesurfer = WaveSurfer.create({
         container: this.$refs.waveform, // << slight FOUC  
         //container: document.querySelector('#waveform'),
         waveColor: '#A8DBA8',
@@ -302,12 +302,12 @@ import Slider from './ui/Slider.vue';
         ]
       });
 
-      this.wavesurfer.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
+      wavesurfer.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
 
 
-      // this.wavesurfer.microphone.on('deviceReady', () => {
+      // wavesurfer.microphone.on('deviceReady', () => {
       //   console.info('Device ready!');
-      //   this.wavesurfer.microphone.start();
+      //   wavesurfer.microphone.start();
       // });
 
       //
@@ -315,29 +315,34 @@ import Slider from './ui/Slider.vue';
       //     wavesurfer.microphone.stop();
 
 
-      this.wavesurfer.on('error', function(e) {
+      wavesurfer.on('error', function(e) {
           console.warn(e);
       });
 
-      this.wavesurfer.on('ready', e => {
-        console.log('duration:', this.wavesurfer.getDuration() );
-        // this.wavesurfer.addRegion({
+      wavesurfer.on('ready', e => {
+        console.log('duration:', wavesurfer.getDuration() );
+        // wavesurfer.addRegion({
         //   start: 0,
-        //   end: this.wavesurfer.getDuration(),
+        //   end: wavesurfer.getDuration(),
         //   minLength: 0, 
-        //   maxLength: this.wavesurfer.getDuration(),
+        //   maxLength: wavesurfer.getDuration(),
         //   loop: true,
         //   color: 'hsla(50, 100%, 30%, 0.5)'
         // });
 
 
-        this.wavesurfer.playPause(); // play once on recording end
-        console.log( Object.values(this.wavesurfer.regions.list) );
+        wavesurfer.play(); // play once on recording end
+        console.log( Object.values(wavesurfer.regions.list) );
+
+        wavesurfer.on('finish', () => {
+          wavesurfer.play();
+        });
+
       });  
 
-      this.wavesurfer.on('region-click', e => {
+      wavesurfer.on('region-click', e => {
 
-        const region = this.wavesurfer.regions.list[e.id];
+        const region = wavesurfer.regions.list[e.id];
         
         if( this.keysHeld.Meta ){
           region.remove();
@@ -352,16 +357,16 @@ import Slider from './ui/Slider.vue';
       });
 
       
-      this.wavesurfer.on('zoom', r => {
+      wavesurfer.on('zoom', r => {
         // console.log('zoom', r);
         this.zoomLevel = r;
       });
 
 
       // region-created fires as soon as you start dragging, not when finished
-      this.wavesurfer.on('region-created', r => {
+      wavesurfer.on('region-created', r => {
         console.log('region-created', r);
-        console.log( Object.values(this.wavesurfer.regions.list) );
+        console.log( Object.values(wavesurfer.regions.list) );
         r.color = '#ff950022';
         r.loop = true;
         r.element.children[0].style.width='1rem';
@@ -373,18 +378,18 @@ import Slider from './ui/Slider.vue';
 
 
 
-      // this.wavesurfer.on('waveform-ready', r => {
+      // wavesurfer.on('waveform-ready', r => {
       //   console.log('waveform-ready');
-      //   const lowpass = this.wavesurfer.backend.ac.createBiquadFilter();
-      //   this.wavesurfer.backend.setFilter(lowpass);
+      //   const lowpass = wavesurfer.backend.ac.createBiquadFilter();
+      //   wavesurfer.backend.setFilter(lowpass);
       //   window.lowpass = lowpass;
       // });
 
-      this.wavesurfer.on('region-update-end', r => {
+      wavesurfer.on('region-update-end', r => {
 
         const duration = r.end - r.start;
         if( duration < 0.1 && !r.created ){
-          r.remove();
+          r.remove(); // ignore new regions that are too small
           return;
         }
 
@@ -392,15 +397,15 @@ import Slider from './ui/Slider.vue';
         r.loop = true;
         this.regionIsLooping = true;
 
-        console.log('region-update-end', r.start, r.end);
-        console.log( Object.values(this.wavesurfer.regions.list) );
+        // console.log('region-update-end', r.start, r.end);
+        // console.log( Object.values(wavesurfer.regions.list) );
         window.r = r;
         this.lastRegion = r;
 
         r.play();  // playLoop?
 
-        // if(this.wavesurfer.getCurrentTime > r.end){
-        //   this.wavesurfer.setCurrentTime(r.start); 
+        // if(wavesurfer.getCurrentTime > r.end){
+        //   wavesurfer.setCurrentTime(r.start); 
         // }
 
       }); // on region created
@@ -410,17 +415,17 @@ import Slider from './ui/Slider.vue';
       // region-in
       // region-out
 
-      this.wavesurfer.on('region-out', r => {
-        const region = this.wavesurfer.regions.list[r.id];
-        // this.wavesurfer.play(region);
+      wavesurfer.on('region-out', r => {
+        const region = wavesurfer.regions.list[r.id];
+        // wavesurfer.play(region);
         // console.log('region out', region.start);
         if( this.regionIsLooping && this.lastRegion && region.id === this.lastRegion.id ){
-          this.wavesurfer.setCurrentTime(region.start); //TODO: check if region has changed
+          wavesurfer.setCurrentTime(region.start); //TODO: check if region has changed
         }
       });
 
-      // this.wavesurfer.load('/bass.wav'); // Load audio from URL
-      window.w   = this.wavesurfer;
+      // wavesurfer.load('/bass.wav'); // Load audio from URL
+      window.w   = wavesurfer;
 
 
       document.addEventListener('keydown', (e) => {
@@ -442,26 +447,26 @@ import Slider from './ui/Slider.vue';
           break;
 
           case 'ArrowLeft': 
-            this.wavesurfer.setCurrentTime( this.wavesurfer.getCurrentTime() - 0.1 );
-            // this.wavesurfer.play();
+            wavesurfer.setCurrentTime( wavesurfer.getCurrentTime() - 0.1 );
+            // wavesurfer.play();
             break;
 
           case 'ArrowRight': 
-            this.wavesurfer.setCurrentTime( this.wavesurfer.getCurrentTime() + 0.1 );
-            // this.wavesurfer.play();
+            wavesurfer.setCurrentTime( wavesurfer.getCurrentTime() + 0.1 );
+            // wavesurfer.play();
             break;
 
           // up/down: Zoom
           case 'ArrowUp': 
-            this.wavesurfer.zoom( Math.min(MAX_ZOOM_LEVEL, this.zoomLevel+50) );
-            // this.wavesurfer.play();
-            this.wavesurfer.params.scrollParent = false;
+            wavesurfer.zoom( Math.min(MAX_ZOOM_LEVEL, this.zoomLevel+50) );
+            // wavesurfer.play();
+            wavesurfer.params.scrollParent = false;
             break;
 
           case 'ArrowDown': 
-            this.wavesurfer.zoom( Math.max(MIN_ZOOM_LEVEL, this.zoomLevel-50) );
-            // this.wavesurfer.play();
-            this.wavesurfer.params.scrollParent = false;
+            wavesurfer.zoom( Math.max(MIN_ZOOM_LEVEL, this.zoomLevel-50) );
+            // wavesurfer.play();
+            wavesurfer.params.scrollParent = false;
             break;
 
         }
@@ -479,7 +484,7 @@ import Slider from './ui/Slider.vue';
         case 'Space':
 
           // return;
-          // this.wavesurfer.microphone.start();
+          // wavesurfer.microphone.start();
           // return;
 
           // if( this.lastRegion ){
@@ -497,16 +502,16 @@ import Slider from './ui/Slider.vue';
             return; 
           } // record if this is first
 
-          this.wavesurfer.playPause();
+          wavesurfer.playPause();
           break;
 
         case 'KeyP':
-          // let region = Object.values(this.wavesurfer.regions.list)[0];
+          // let region = Object.values(wavesurfer.regions.list)[0];
           this.lastRegion?.playLoop();  // && this.lasregion.playLoop();
           break;
 
         case 'KeyR':
-          // let region = Object.values(this.wavesurfer.regions.list)[1];
+          // let region = Object.values(wavesurfer.regions.list)[1];
           // region.playLoop();
           // if( this.isRecording ){
           //   this.hasEverRecorded = true;
@@ -527,10 +532,29 @@ import Slider from './ui/Slider.vue';
 
         case 'KeyS':
           // TODO: save active region/whole buffer
-          const wave =  bufferToWave(this.wavesurfer.backend.buffer, 0, this.wavesurfer.backend.buffer.length);
-          // console.log('save', this.wavesurfer.backend.buffer.length);
-          saveFile(wave, dateString() + '.wav');
-          // console.log('wave', wave);
+
+          if(!this.lastRegion) return;
+
+          const copied = copy(this.lastRegion, wavesurfer);
+          console.log('copied', copied);
+
+          const regionWave =  bufferToWave(copied, 0, copied.length);
+          saveFile(regionWave, dateString() + '.wav');
+
+          // const rate = wavesurfer.backend.getAudioContext().sampleRate;
+          // console.log('rate', rate);
+          // const wave =  bufferToWave(
+          //   wavesurfer.backend.buffer, 
+          //   // 0, 
+          //   // wavesurfer.backend.buffer.length
+          //   this.lastRegion.start * rate / 2.0, // offset
+          //   (this.lastRegion.end - this.lastRegion.start) * rate / 2.0, // length
+          //   // (this.lastRegion.end - this.lastRegion.start)
+          // );
+
+
+          // const wave =  bufferToWave(wavesurfer.backend.buffer, 0, wavesurfer.backend.buffer.length);
+          // saveFile(wave, dateString() + '.wav');
           break;
 
         case 'Comma':
@@ -546,15 +570,25 @@ import Slider from './ui/Slider.vue';
           // Loop ends adjust:
 
           //  [ , ]  - end adjust
-          case 'BracketLeft': this.adjustRegion(-REGION_RESIZE_SMALL);
+          case 'BracketLeft': this.adjustRegion(
+            e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL
+          );
             break;
-          case 'BracketRight': this.adjustRegion(REGION_RESIZE_SMALL);
+          case 'BracketRight': this.adjustRegion(
+            e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL
+          );
             break;
             
           //  q, w  - start adjust
-          case 'KeyQ': this.adjustRegion(-REGION_RESIZE_SMALL, 'start');
+          case 'KeyQ': this.adjustRegion(
+            e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL,
+            'start'
+          );
             break;
-          case 'KeyW': this.adjustRegion(REGION_RESIZE_SMALL, 'start');
+          case 'KeyW': this.adjustRegion(
+            e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL,
+            'start'
+          );
             break;
 
 
@@ -569,59 +603,92 @@ import Slider from './ui/Slider.vue';
     },
 
 
-    async getMediaDevices(){
-      console.log('getting media devices...');
+    async getMediaDevices(changed=false){
+      console.log('%cgetMediaDevices()', 'color: orange; font-size: 1.3rem');
+      if(changed){
+        console.log('%cmedia device list CHANGE', 'color: red; font-size: 1.5rem;');
+      }
+
       this.prevAudioDevices = { ...this.audioDevices };
 
       const devices = await navigator.mediaDevices.enumerateDevices();
-      
       console.log({devices});
 
-      const newDevices = {};  
+      const newAudioDevices = {};  // for audio select dropdown
       const audioDevices = devices.filter(d => d.kind === 'audioinput');
       audioDevices.forEach(d => {
-        newDevices[d.deviceId] = d.label;
-        console.log('Input:', d.label);
+        newAudioDevices[d.deviceId] = d.label;
       });
 
       const prevDeviceCount = Object.keys(this.prevAudioDevices).length;
-      const newDeviceCount  = Object.keys(newDevices).length;
-      console.log({ prevDeviceCount, newDeviceCount }); 
+      const newDeviceCount  = Object.keys(newAudioDevices).length;
+      // console.log({ prevDeviceCount, newDeviceCount }); 
 
-      if( prevDeviceCount > 0 && prevDeviceCount < newDeviceCount ){
-        console.log('%cDEVICE ADDED!', 'color: green; font-weight: bold');
-        // ASSUMPTION: newly-added device is always the last in the list
-        this.selectedInputDevice = audioDevices[audioDevices.length - 1].deviceId;
-      } else if(prevDeviceCount > newDeviceCount){
-        console.log('%cDEVICE REMOVED!', 'color: red; font-weight: bold');
-        // Stop using the removed device, if it was the selected device (use first device in list?)
-        if( !(this.selectedInputDevice in newDevices) ){
-          console.log('%cDe-selecting removed device', 'color: red; font-weight: bold');
+      // Device list CHANGE check
+      if( changed ){
+
+        if( prevDeviceCount > 0 && prevDeviceCount < newDeviceCount ){
+          console.log('%cDEVICE ADDED!', 'color: green; font-weight: bold');
+          // ASSUMPTION: newly-added device is always the last in the list - WRONG
+          const prevDeviceIds = Object.keys(this.prevAudioDevices);
+          const newDeviceIds = Object.keys(newAudioDevices);
+          const newId = newDeviceIds.find( id => !prevDeviceIds.includes(id) );
+          console.log('newId', newId);
+          if( newId ){
+            this.selectedInputDevice = newId;
+            localStorage.setItem('selectedInputDevice', newId); // save
+          }
+
+        } else if(prevDeviceCount > newDeviceCount){
+          console.log('%cDEVICE REMOVED!', 'color: red; font-weight: bold');
+          // Stop using the removed device, if it was the selected device (use first device in list?)
+          if( !(this.selectedInputDevice in newAudioDevices) ){
+            console.log('%cDe-selecting removed device', 'color: red; font-weight: bold');
+            // TODO: try for preferred device again before defaulting to first?
+            this.selectedInputDevice = audioDevices[0].deviceId;
+          }
+        }
+
+      } else {
+
+        // NOT called due to change, but initial setup
+        const preferredDevice = audioDevices.find( d => d.deviceId === this.selectedInputDevice);
+        if( !preferredDevice ){
+          // Preferred device not found, so default to first device
+          console.log('Defaulting to first device:', audioDevices[0]);
           this.selectedInputDevice = audioDevices[0].deviceId;
         }
-      } else {
-        // Default to first device
-        this.selectedInputDevice = audioDevices[0].deviceId;
-      }
-      // .catch(console.error);
+      
+      } // end changed check
+     
 
-      this.audioDevices = newDevices;
-    },
+      this.audioDevices = newAudioDevices;
+
+      if( newDeviceCount > 0 ){
+        this.initRecorder(); // WAS: in mounted() independent of this
+      }
+
+    }, // getMediaDevices()
 
 
     async initRecorder(){
+      console.log('%cinitRecorder():', 'color: red; font-size: 1.2rem', this.selectedInputDevice);
 
       if (!navigator.mediaDevices) {
         return console.error('getUserMedia not supported in this browser!');
       }
 
+      console.log('this.audioDevices', this.audioDevices);
       if( Object.keys(this.audioDevices).length === 0 ){
+        console.log('No devices (length = 0)');
         return;
       }
 
-      console.log('devices', Object.keys(this.audioDevices));
+      console.log('initRecorder(): audio devices', Object.keys(this.audioDevices));
       console.log('selected', this.selectedInputDevice);
       let options;
+
+      // TODO: this should already have been sorted out by this.getMediaDevices()
       if( this.selectedInputDevice in this.audioDevices ){
         console.log('Using selected device', this.selectedInputDeviceName);
         options = { audio: { deviceId: this.selectedInputDevice } };
@@ -633,21 +700,22 @@ import Slider from './ui/Slider.vue';
 
       const stream = await navigator.mediaDevices.getUserMedia( options );
       // .then(stream => {
+      console.log('stream options:', options);
 
-        this.mediaRecorder = new MediaRecorder(stream);
-        window.rec = this.mediaRecorder;
+        mediaRecorder = new MediaRecorder(stream);
+        window.rec = mediaRecorder;
         
-        this.mediaRecorder.onstop = (e) => {
+        mediaRecorder.onstop = (e) => {
           const blob = new Blob(chunks, { 'type' : 'audio/webm; codecs=pcm' });
           // window.open(URL.createObjectURL(blob));
           // Provide to WaveSurfer
           const audio = new Audio();
           audio.src = URL.createObjectURL(blob);
-          this.wavesurferAdd(audio);
+          wavesurfer.load( audio );
           chunks = [];
         }
 
-        this.mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
 
       // })
       // .catch(err => {
@@ -656,19 +724,19 @@ import Slider from './ui/Slider.vue';
 
     }, // initRecorder()
 
-    wavesurferAdd( audio ){
+    // wavesurferAdd( audio ){
 
-      // this.wavesurfer.loadBlob( audio ); // doesn't work! 
-      this.wavesurfer.load( audio );
+    //   // wavesurfer.loadBlob( audio ); // doesn't work! 
+    //   wavesurfer.load( audio );
       
-    }, // wavesurferAdd()
+    // }, // wavesurferAdd()
 
 
     rangeClick(e){
       // d(e)
       // if( e.originalTarget.nodeName !== 'INPUT' ){
       // }
-      // this.wavesurfer.setPlaybackRate(1);
+      // wavesurfer.setPlaybackRate(1);
       this.playbackRate = 1.0;
     },
 
@@ -683,6 +751,7 @@ import Slider from './ui/Slider.vue';
       console.log('inputChanged');
       localStorage.setItem('selectedInputDevice', this.selectedInputDevice);
       this.$refs.waveform.focus();
+      this.initRecorder();
     },
 
     restoreState(){
@@ -697,13 +766,13 @@ import Slider from './ui/Slider.vue';
     handleScrollZoom(e){
       // console.log('handleScrollZoom');    
       // d(e);
-      this.wavesurfer.zoom( 
+      wavesurfer.zoom( 
         Math.max(MIN_ZOOM_LEVEL, 
           Math.min(MAX_ZOOM_LEVEL, this.zoomLevel - e.deltaY)
         )
       );
-      this.wavesurfer.params.scrollParent = false;
-      //  this.wavesurfer.zoom( Math.max(100, this.zoomLevel-50) );
+      wavesurfer.params.scrollParent = false;
+      //  wavesurfer.zoom( Math.max(100, this.zoomLevel-50) );
 
     },
 
@@ -713,9 +782,18 @@ import Slider from './ui/Slider.vue';
 
 
     handleWaveClick(e){
-      d(e, e.originalTarget.nodeName)
+      // d(e, e.originalTarget.nodeName)
       if(e.originalTarget.nodeName !== 'REGION'){
         this.regionIsLooping = false;
+      }
+    },
+
+
+    handleMiddleClick(e){
+      d(e, e.originalTarget.nodeName)
+      if(e.originalTarget.nodeName !== 'REGION'){
+        // this.regionIsLooping = false;
+        console.log('middle clicl, ');
       }
     },
 
@@ -763,18 +841,18 @@ import Slider from './ui/Slider.vue';
             // Create a Blob providing as first argument a typed array with the file buffer
             var blob = new window.Blob([new Uint8Array(ev.target.result)]);
             audio.src = URL.createObjectURL(blob);
-            const loader = this.wavesurfer.load(audio); 
+            const loader = wavesurfer.load(audio); 
             // console.log('loader', loader); // nothing
-            // this.wavesurfer.addRegion({
+            // wavesurfer.addRegion({
             //   start: 0,
-            //   end: this.wavesurfer.getDuration(),
+            //   end: wavesurfer.getDuration(),
             //   minLength: 0, 
-            //   maxLength: this.wavesurfer.getDuration(),
+            //   maxLength: wavesurfer.getDuration(),
             //   loop: true,
             //   color: 'hsla(50, 100%, 30%, 0.5)'
             // });
             //
-            // this.wavesurfer.loadBlob(blob); 
+            // wavesurfer.loadBlob(blob); 
             // ^^^ Error:
             // Error decoding audiobuffer Main.vue:246:19
             // HTTP “Content-Type” of “text/html” is not supported. Load of media resource http://localhost:5173/[object%20AudioBuffer] failed. localhost:5173
@@ -798,7 +876,7 @@ import Slider from './ui/Slider.vue';
         //       item.file(file => {
         //         let reader = new FileReader();
         //         console.log('reader', file);
-        //         // this.wavesurfer.load(file);
+        //         // wavesurfer.load(file);
         //
         //         reader.onload = (ev) => {
         //
@@ -813,14 +891,14 @@ import Slider from './ui/Slider.vue';
         //           // successCallback(reader.result);
         //           console.log('SUCCESS', reader.readyState);
         //           const blob = new Blob([new Uint8Array(reader.result)]);
-        //           this.wavesurfer.loadBlob(blob);
+        //           wavesurfer.loadBlob(blob);
         //           // console.log('SUCCESS', reader.result);
         //           // const blob = new Blob(reader.result);
-        //           // this.wavesurfer.loadBlob(reader.result);
+        //           // wavesurfer.loadBlob(reader.result);
         // 
         //           // const audio = new Audio();
         //           // audio.src = URL.createObjectURL(blob);
-        //           // this.wavesurferAdd(audio);
+        //           // wavesurferAdd(audio);
         //           // chunks = [];
         //         };
         //
@@ -846,9 +924,7 @@ import Slider from './ui/Slider.vue';
 
     initMicMonitor(){
 
-      console.log('container', document.querySelector('#micMonitor'));
-
-      this.wavesurferMicMonitor = WaveSurfer.create({
+      wavesurferMicMonitor = WaveSurfer.create({
         container:     this.$refs.micMonitor, //document.querySelector('#micMonitor'),
         waveColor:     'orange',
         interact:      false,
@@ -859,35 +935,35 @@ import Slider from './ui/Slider.vue';
         plugins:       [ MicrophonePlugin.create() ]
       });
 
-      window.mon = this.wavesurferMicMonitor;
+      window.mon = wavesurferMicMonitor;
 
-      this.wavesurferMicMonitor.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
+      wavesurferMicMonitor.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
 
       
 
       // Nope! None of it works :shrug:
-      // this.wavesurferMicMonitor.on('audioprocess', e => {
+      // wavesurferMicMonitor.on('audioprocess', e => {
       //   console.log('audioprocess', e);
       // });
 
-      // this.wavesurferMicMonitor.microphone.on('audioprocess', e => {
+      // wavesurferMicMonitor.microphone.on('audioprocess', e => {
       //   console.log('audioprocess', e);
       // });
 
-      this.wavesurferMicMonitor.microphone.on('deviceReady', (stream)  => {
+      wavesurferMicMonitor.microphone.on('deviceReady', (stream)  => {
         console.log('Device ready!', stream);
 
         // Attach awkwardly to audio process event (keeping existing)
-        // const micProc = this.wavesurferMicMonitor.microphone.levelChecker.onaudioprocess;
-        // this.wavesurferMicMonitor.microphone.levelChecker.onaudioprocess = e => {
+        // const micProc = wavesurferMicMonitor.microphone.levelChecker.onaudioprocess;
+        // wavesurferMicMonitor.microphone.levelChecker.onaudioprocess = e => {
         //   micProc(e);
         //   console.log('proc', e);
         // };
 
-        this.wavesurferMicMonitor.backend.analyser.fftSize = 64;
+        wavesurferMicMonitor.backend.analyser.fftSize = 64;
 
         if( this.recordThreshold > 0 ){
-          this.wavesurferMicMonitor.microphone.levelChecker.addEventListener('audioprocess', e => {
+          wavesurferMicMonitor.microphone.levelChecker.addEventListener('audioprocess', e => {
             if( this.isWaitingToRecord ){
               for (let channel = 0; channel < e.inputBuffer.numberOfChannels; channel++) {
                 const inputData = e.inputBuffer.getChannelData(channel);
@@ -903,9 +979,9 @@ import Slider from './ui/Slider.vue';
             // console.log('mic audioprocess', e.inputBuffer);
             // processAudioBuffer(e.inputBuffer);
             // 
-            // const bufferLength = this.wavesurferMicMonitor.backend.analyser.frequencyBinCount;
+            // const bufferLength = wavesurferMicMonitor.backend.analyser.frequencyBinCount;
             // const dataArray = new Uint8Array(bufferLength);
-            // this.wavesurferMicMonitor.backend.analyser.getByteTimeDomainData(dataArray);
+            // wavesurferMicMonitor.backend.analyser.getByteTimeDomainData(dataArray);
             // // console.log(dataArray);
             // let debugBytes = '';
             // for(const d of dataArray){
@@ -918,7 +994,7 @@ import Slider from './ui/Slider.vue';
         }
 
       });
-      this.wavesurferMicMonitor.microphone.on('deviceError', function(code) {
+      wavesurferMicMonitor.microphone.on('deviceError', function(code) {
           console.warn('Device error: ' + code);
       });
 
@@ -939,6 +1015,31 @@ import Slider from './ui/Slider.vue';
   }, // methods
 
 
+}
+
+// https://stackoverflow.com/a/55932619
+function copy(region, instance){
+    var segmentDuration = region.end - region.start
+
+    // If I don't log them out, it doesn't work?
+    console.log('copy(): duration: ', segmentDuration);
+    console.log('ws', instance.backend.buffer);
+    console.log('start, end', region.start, region.end);
+
+    var originalBuffer = instance.backend.buffer;
+    var emptySegment = instance.backend.ac.createBuffer(
+        originalBuffer.numberOfChannels,
+        segmentDuration * originalBuffer.sampleRate,
+        originalBuffer.sampleRate
+    );
+    for (var i = 0; i < originalBuffer.numberOfChannels; i++) {
+        var chanData = originalBuffer.getChannelData(i);
+        var emptySegmentData = emptySegment.getChannelData(i);
+        var mid_data = chanData.subarray( region.start * originalBuffer.sampleRate, region.end * originalBuffer.sampleRate);
+        emptySegmentData.set(mid_data);
+    }
+
+    return emptySegment
 }
 
 
@@ -1032,7 +1133,7 @@ function saveFile(fileURL, filename) {
     a.download = filename;
     a.click();
     setTimeout(() => {
-      window.URL.revokeObjectURL(url);
+      window.URL.revokeObjectURL(fileURL);
       document.body.removeChild(a);
     }, 0)
   }

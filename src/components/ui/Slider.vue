@@ -5,7 +5,7 @@
       @mousedown="down"
       @mouseup="up"
       @mousemove="move"
-      @wheel="wheel"
+      @wheel.prevent="wheel"
       @dblclick="dblclick"
       @mouseleave="mouseleave"
       @auxclick="dblclick"
@@ -92,11 +92,12 @@ export default {
     dblclick(ev){
       ev.preventDefault();
       console.log('dblclick', ev);
-      if(this.defaultValue && this.min && this.max){
+      if(this.defaultValue && this.min !== undefined && this.max !== undefined){
         this.percent = this.valueNorm(this.defaultValue);
+        console.log('default!');
         // this.currentValue = this.defaultValue; // need this?
         this.$emit('update:modelValue', this.defaultValue);
-      }
+      } 
       this.$emit('dblclick', ev);
     },
 

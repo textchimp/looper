@@ -2,10 +2,24 @@
   <div class="container">
 
     <div id="inputDevices">
-        <!-- <span>{{ selectedInputDeviceName }}</span> -->
-        <select v-model="selectedInputDevice" @change="inputChanged">
+      <span class="label">
+        In: {{ this.selectedInputDeviceNameAbbrev }}
+      </span>
+      <span class="select">
+        <select 
+          v-model="selectedInputDevice" 
+          @change="inputChanged" 
+          @keydown.space.prevent="handleSpacebarPress"
+        >
           <option :key="id" v-for="(name, id) in audioDevices" :value="id">In: {{ name }}</option>
         </select>  
+        <label>
+          <input type="checkbox" 
+            v-model="inputIsMono" 
+            @change="monoChanged" 
+            @keydown.space.prevent="handleSpacebarPress"
+          />Mono</label>
+      </span>
     </div>
 
      <div id="outputDevices"  @click="setOutputDevice" :title="selectedOutputDevice.label">
@@ -14,17 +28,25 @@
 
     <div id="msg">
               
-
       <div v-if="isRecording">[ recording ]</div>
       <div v-else-if="isWaitingToRecord">[ record arm: {{recordThreshold}} ]</div>
 
       <div v-if="!isRecording && hasEverRecorded" @click.stop="" class="rangeResetArea">
-        <!-- <input @click.stop="" type="range" min="0.1" max="2.0" step="0.01" v-model="playbackRate"> -->
+
+        <!-- <input @click.stop="" type="range" min="0" max="20000" v-model="lowpassFilterFreq"> -->
+         <Slider v-model="lowpassFilterFreq"
+          label="gain" :min="0" :max="4" :defaultValue="1" 
+          style="height: 30px; width: 400px; margin: 0 auto;" 
+        />
+
         <Slider v-model="playbackRate"
-          label="rate"
-          :min="0.13" 
-          :max="2" 
-          :defaultValue="1" 
+          label="rate" :min="0.13" :max="2" :defaultValue="1" 
+          style="height: 30px; width: 400px; margin: 0 auto;" 
+        />
+        
+        
+        <Slider v-model="stereoPan"
+          label="pan" :min="-1" :max="1" :defaultValue="0" 
           style="height: 30px; width: 400px; margin: 0 auto;" 
         />
       </div>
@@ -58,21 +80,30 @@
 
 const MIN_ZOOM_LEVEL = 160;
 const MAX_ZOOM_LEVEL = 500;
-const WAVE_HEIGHT_FACTOR = 0.8;
+const WAVE_HEIGHT_FACTOR = 0.85;
 
 const REGION_RESIZE_SMALL = 0.01;
 const REGION_RESIZE_MEDIUM = 0.1;
 const REGION_RESIZE_LARGE = 0.2;
+
 let chunks = [];
 
 const env = process.env.NODE_ENV;
 
 /*
 TODO:
-  - Microphone monitor does not show selected inputs, defaults to first?
-  
+  - Cloudinary upload / load?
+
+  - how to handle overlapping/nested regions? causes weird loop behaviour, can't select when obscured completely, etc
+
+  - arrow icons/unicode for drag handles
+
+  - Cmd+v to paste URL to load?
+
+  - show friendly message/instructions if mic permission not given
+
   - sort out damn play/pause/loop of regions inconsistencies
-  - fucking kbd focus on dropdown for tab/space, can't blur the fucker
+
   - prevent leaving region on scroll
   - middle click to extend region? 'auxclick' event! (what about trackpad though?)
 
@@ -111,6 +142,9 @@ let wavesurfer = null;
 let wavesurferMicMonitor = null;
 let mediaRecorder = null;
 
+const filters = {
+};
+
 
  export default {
   name: 'Main',
@@ -130,12 +164,16 @@ let mediaRecorder = null;
       lastRegion: null,
       regionCount: 0,
 
+      lowpassFilterFreq: 0,
+      stereoPan: 0, 
+
       showSplashScreen: true,
 
       audioDevices: {},
       prevAudioDevices: {}, // for keeping track of added device
       selectedInputDevice: null,
       selectedOutputDevice: {},
+      inputIsMono: false,
 
       keysHeld: {
         Control: false,
@@ -159,6 +197,14 @@ let mediaRecorder = null;
       return this.audioDevices[this.selectedInputDevice] || '(none)';
     },
 
+    selectedInputDeviceNameAbbrev(){
+      const name = this.audioDevices[this.selectedInputDevice];
+      if(!name) return '(none)';
+      const abbrev = name.split(' ').slice(0, 2).map(s => s.substring(0, 3)).join('');
+      const mono = this.inputIsMono ? ' (mono)' : '';
+      return abbrev + mono;
+    },
+
     getMicMonitorStyle(){
       // can't just use 'v-if' because mic plugin needs to find container element or throws
       return this.isRecording ? 'display: inline-block' : 'display: none' ;
@@ -179,6 +225,17 @@ let mediaRecorder = null;
       } 
     },
 
+    lowpassFilterFreq(v){
+      console.log('lowpass', v);
+      // l.frequency.value = v;
+      g.gain.value = v;
+    },
+
+    stereoPan(v){
+      filters.panner.pan.value = v;
+      d(v);
+    },
+
     // NO! Watchers are async, which is too hard to debug
     // So instead: manually run this.initRecorder() after change to input
     // selectedInputDevice(v){
@@ -186,27 +243,49 @@ let mediaRecorder = null;
     //   this.initRecorder(); // re-initialise audio input
     // },
 
+  }, // watch
+
+
+  filters: {
+    // WHY DOESN'T THIS WORK
+    nameAbbrevfunction(str){
+      return str.split(' ').map(s => s[0]).join('');
+    },
+
   },
 
 
   mounted(){
     this.restoreState();
 
-    // this.initFileManager();
-
     this.initFileDragDrop();
 
     this.getMediaDevices();
+      // triggers:
+      // this.initRecorder(); 
+      // this.initMicMonitor();
+      //
+      // .... if devices are available
 
     navigator.mediaDevices.ondevicechange = (e) => {
-      // console.log('device change', e);
-      this.getMediaDevices(true); // arg indicates change
+      this.getMediaDevices(true); // arg indicates change, not init
     };
 
     this.initWavesurfer();
-    // this.initRecorder(); // should happen automatically when getMediaDevices() updates selectedInputDevice (watcher)
 
-    this.$refs.waveform.focus();
+    document.addEventListener('paste', (e) => {
+
+      const clipboardData = e.clipboardData || window.clipboardData;
+      const pastedData = clipboardData.getData('Text');
+
+      console.log('PASTE', pastedData);
+      if(pastedData.startsWith('http')){
+        wavesurfer.load( pastedData );
+        this.hasEverRecorded = true; // prevent spacebar from recording
+      }
+
+    });
+
   }, // mounted
 
 
@@ -259,12 +338,16 @@ let mediaRecorder = null;
    
 
     initWavesurfer(){
+       console.log('%cinitWavesurfer():', 'color: red; font-size: 1.2rem');
+
 
       wavesurfer = WaveSurfer.create({
         container: this.$refs.waveform, // << slight FOUC  
         //container: document.querySelector('#waveform'),
         waveColor: '#A8DBA8',
         progressColor: '#3B8686',
+
+        splitChannels: true,
 
         fillParent: true,
         scrollParent: false,
@@ -273,7 +356,12 @@ let mediaRecorder = null;
         // pixelRatio: 1,
         // autocenter: true,
 
-        backend: 'MediaElement',  // wavesurfer.backend  ??? MediaElement / WebAudio
+        responsive: true,
+
+        // ISSUE: with WebAudio, 'setPlaybackRate'  actually changes rate (inc. pitch)
+        // instead of a nice time stretch...
+        backend: 'WebAudio',  // wavesurfer.backend  ??? MediaElement / WebAudio
+        // backend: 'MediaElement',  // wavesurfer.backend  ??? MediaElement / WebAudio
         plugins: [
             
             // MicrophonePlugin.create(),
@@ -302,25 +390,93 @@ let mediaRecorder = null;
         ]
       });
 
-      wavesurfer.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
-
-
-      // wavesurfer.microphone.on('deviceReady', () => {
-      //   console.info('Device ready!');
-      //   wavesurfer.microphone.start();
-      // });
-
-      //
-      // if (wavesurfer.microphone.active) {
-      //     wavesurfer.microphone.stop();
-
+      
 
       wavesurfer.on('error', function(e) {
-          console.warn(e);
+          console.error(e);
+      });
+
+      wavesurfer.on('waveform-ready', e => {
+        // This event is needed when using the MediaElement backend, to wait until 
+        // the buffer is defined
+        const height = window.innerHeight / wavesurfer.backend.buffer.numberOfChannels;
+        wavesurfer.setHeight( height * WAVE_HEIGHT_FACTOR );
+
+        // console.log('analyser', );
+
+        // NO! THIS IS NOT THE HANDLER CURRENTLY IN USE
+        //
+        try {
+          const gain = wavesurfer.backend.ac.createGain();
+          window.g = gain // NO
+          gain.gain.value = 0.1;
+          g.gain.setValueAtTime(0.2, wavesurfer.backend.ac.currentTime);
+          // wavesurfer.backend.setFilters(gain);
+
+          // filters.panner = w.backend.ac.createPanner();
+          // window.p = filters.panner;
+          // windows.f = filters;
+          // console.log('filter', filters);
+  
+          // panner.setPosition(Math.sin(-45 * (Math.PI / 180)), 0, 0)
+          // panner.channelCountMode = 'explicit';
+          // wavesurfer.backend.setFilters(filters.panner);
+  
+        } catch(e) {
+          console.error('Error adding filter', e);
+        }
+        // const lowpass = wavesurfer.backend.ac.createBiquadFilter();
+        // wavesurfer.setFilter(lowpass);
+        // window.l = lowpass;
+
+        // this.wavesurfer.backend.setPeaks(null); 
+        // this.wavesurfer.drawBuffer();
+
       });
 
       wavesurfer.on('ready', e => {
         console.log('duration:', wavesurfer.getDuration() );
+
+        const height = window.innerHeight / wavesurfer.backend.buffer.numberOfChannels;
+        wavesurfer.setHeight( height * WAVE_HEIGHT_FACTOR );
+
+         try {
+          const gain = wavesurfer.backend.ac.createGain();
+          window.g = gain;
+          gain.gain.value = 1;
+          filters.gain = gain;
+          // g.gain.setValueAtTime(0.2, wavesurfer.backend.ac.currentTime);
+          // wavesurfer.backend.setFilter(gain);
+
+          // const panner = w.backend.ac.createPanner();
+          // panner.setPosition(Math.sin(-45 * (Math.PI / 180)), 0, 0)
+          // panner.channelCountMode = 'explicit';
+          
+          filters.panner = w.backend.ac.createStereoPanner();
+          window.p = filters.panner;
+          filters.panner.pan.value = 0.6;
+
+          // filters.panner = w.backend.ac.createPanner();
+          // window.p = filters.panner;
+          // filters.panner.pan.value = 0; // this works!
+          
+          window.f = filters;
+          wavesurfer.backend.setFilters([
+            filters.gain,
+            filters.panner
+          ]);
+
+            // THIS WORKS
+            // const lowpass = wavesurfer.backend.ac.createBiquadFilter();
+            // wavesurfer.backend.setFilter(lowpass);
+            // window.l = lowpass;
+            
+          // console.log('filters', wavesurfer.getFilters());
+  
+        } catch(e) {
+          console.error('Error adding filter', e);
+        }
+
         // wavesurfer.addRegion({
         //   start: 0,
         //   end: wavesurfer.getDuration(),
@@ -332,10 +488,10 @@ let mediaRecorder = null;
 
 
         wavesurfer.play(); // play once on recording end
-        console.log( Object.values(wavesurfer.regions.list) );
+        // console.log( Object.values(wavesurfer.regions.list) );
 
         wavesurfer.on('finish', () => {
-          wavesurfer.play();
+          wavesurfer.play();  // hack for looping whole recording
         });
 
       });  
@@ -424,8 +580,8 @@ let mediaRecorder = null;
         }
       });
 
-      // wavesurfer.load('/bass.wav'); // Load audio from URL
       window.w   = wavesurfer;
+
 
 
       document.addEventListener('keydown', (e) => {
@@ -482,27 +638,7 @@ let mediaRecorder = null;
       document.addEventListener('keypress', (e) => {
         switch( e.code ){
         case 'Space':
-
-          // return;
-          // wavesurfer.microphone.start();
-          // return;
-
-          // if( this.lastRegion ){
-          //   this.lastRegion.playLoop();
-          // }
-          
-          if( !this.hasEverRecorded || this.isRecording ){
-            // if( rec.state === 'recording' ){
-            if( this.isRecording ){
-              this.stopRecord();
-            } else {
-              this.record();
-            }
-
-            return; 
-          } // record if this is first
-
-          wavesurfer.playPause();
+          this.handleSpacebarPress();
           break;
 
         case 'KeyP':
@@ -511,14 +647,6 @@ let mediaRecorder = null;
           break;
 
         case 'KeyR':
-          // let region = Object.values(wavesurfer.regions.list)[1];
-          // region.playLoop();
-          // if( this.isRecording ){
-          //   this.hasEverRecorded = true;
-          //   this.stopRecord();
-          // } else {
-          //   this.record();
-          // }
           if( this.isRecording ) {
             this.stopRecord();
           } else {
@@ -534,27 +662,28 @@ let mediaRecorder = null;
           // TODO: save active region/whole buffer
 
           if(!this.lastRegion) return;
+          
+          const fullWave =  bufferToWave(wavesurfer.backend.buffer, 0, wavesurfer.backend.buffer.length);
+          saveFile(fullWave, dateString() + '.full.wav');
 
-          const copied = copy(this.lastRegion, wavesurfer);
-          console.log('copied', copied);
+          // works INTERMITTENTLY - occasional "RangeError: source array is too long"
+          // const copied = copy(this.lastRegion, wavesurfer);
+          // console.log('copied', copied);
+          // const regionWave =  bufferToWave(copied, 0, copied.length);
+          // saveFile(regionWave, dateString() + '.wav');
 
-          const regionWave =  bufferToWave(copied, 0, copied.length);
-          saveFile(regionWave, dateString() + '.wav');
-
-          // const rate = wavesurfer.backend.getAudioContext().sampleRate;
-          // console.log('rate', rate);
-          // const wave =  bufferToWave(
-          //   wavesurfer.backend.buffer, 
-          //   // 0, 
-          //   // wavesurfer.backend.buffer.length
-          //   this.lastRegion.start * rate / 2.0, // offset
-          //   (this.lastRegion.end - this.lastRegion.start) * rate / 2.0, // length
-          //   // (this.lastRegion.end - this.lastRegion.start)
-          // );
+          const rate = wavesurfer.backend.buffer.sampleRate;
+          console.log('rate', rate);
+          const wave =  bufferToWave(
+            wavesurfer.backend.buffer, 
+            // 0, wavesurfer.backend.buffer.length
+            this.lastRegion.start * rate, // offset
+            (this.lastRegion.end - this.lastRegion.start) * rate, // length
+            // (this.lastRegion.end - this.lastRegion.start)
+          );
 
 
-          // const wave =  bufferToWave(wavesurfer.backend.buffer, 0, wavesurfer.backend.buffer.length);
-          // saveFile(wave, dateString() + '.wav');
+          
           break;
 
         case 'Comma':
@@ -598,13 +727,30 @@ let mediaRecorder = null;
         }
       });
 
-      this.initMicMonitor();
+      // console.groupEnd();
+    }, // initWavesurfer()
 
+
+    // also used when space pressed on input select, which otherwise triggers dropdown select default behaviour
+    handleSpacebarPress(){
+      if( !this.hasEverRecorded || this.isRecording ){
+        // if( rec.state === 'recording' ){
+        if( this.isRecording ){
+          this.stopRecord();
+        } else {
+          this.record();
+        }
+        
+        return; 
+      } // record if this is first
+
+      wavesurfer.playPause();
     },
 
 
     async getMediaDevices(changed=false){
-      console.log('%cgetMediaDevices()', 'color: orange; font-size: 1.3rem');
+     console.log('%cgetMediaDevices()', 'color: orange; font-size: 1.3rem');
+     
       if(changed){
         console.log('%cmedia device list CHANGE', 'color: red; font-size: 1.5rem;');
       }
@@ -664,72 +810,184 @@ let mediaRecorder = null;
 
       this.audioDevices = newAudioDevices;
 
+      // console.groupEnd();
+
       if( newDeviceCount > 0 ){
-        this.initRecorder(); // WAS: in mounted() independent of this
+        this.initRecorder(); 
+        this.initMicMonitor();
       }
 
     }, // getMediaDevices()
 
 
     async initRecorder(){
-      console.log('%cinitRecorder():', 'color: red; font-size: 1.2rem', this.selectedInputDevice);
+      console.log('%cinitRecorder():', 'color: red; font-size: 1.2rem');
 
       if (!navigator.mediaDevices) {
         return console.error('getUserMedia not supported in this browser!');
       }
 
-      console.log('this.audioDevices', this.audioDevices);
+      // console.log('this.audioDevices', this.audioDevices);
       if( Object.keys(this.audioDevices).length === 0 ){
         console.log('No devices (length = 0)');
         return;
       }
 
-      console.log('initRecorder(): audio devices', Object.keys(this.audioDevices));
-      console.log('selected', this.selectedInputDevice);
+      // console.log('initRecorder(): audio devices', Object.keys(this.audioDevices));
+      // console.log('selected', this.selectedInputDevice);
       let options;
+
+      // NOTE: `channelCount: 1` in options below WORKS for Scarlet 2i2
+      // but seems to merge both mic inputs down to mono? Oh well!
 
       // TODO: this should already have been sorted out by this.getMediaDevices()
       if( this.selectedInputDevice in this.audioDevices ){
         console.log('Using selected device', this.selectedInputDeviceName);
-        options = { audio: { deviceId: this.selectedInputDevice } };
+        options = { audio: { deviceId: this.selectedInputDevice, channelCount: 1 } };
       } else {
-        console.log('Using default audio input device?');
-        // options = { audio: true };
-        options = { audio: { deviceId: this.selectedInputDevice } };
+        const firstDevice = Object.keys(this.audioDevices)[0];
+        console.log('Using default (first) audio input device', firstDevice);
+        // options = { audio: true }; // TODO: does this work?
+        options = { audio: { deviceId: firstDevice } };
+        this.selectedInputDevice = firstDevice;
       }
 
+      if( this.inputIsMono ){
+        options.audio.channelCount = 1;
+        wavesurfer.params.splitChannels = false;
+      } else {
+        options.audio.channelCount = 2;
+        wavesurfer.params.splitChannels = true;
+      }
+
+      console.log('%cOPTIONS for initRecorder() getUserMedia()', 'color: red', options, this.audioDevices[this.selectedInputDevice]);
+
+      // TODO: catch errors?
       const stream = await navigator.mediaDevices.getUserMedia( options );
-      // .then(stream => {
-      console.log('stream options:', options);
 
-        mediaRecorder = new MediaRecorder(stream);
-        window.rec = mediaRecorder;
-        
-        mediaRecorder.onstop = (e) => {
-          const blob = new Blob(chunks, { 'type' : 'audio/webm; codecs=pcm' });
-          // window.open(URL.createObjectURL(blob));
-          // Provide to WaveSurfer
-          const audio = new Audio();
-          audio.src = URL.createObjectURL(blob);
-          wavesurfer.load( audio );
-          chunks = [];
-        }
+      mediaRecorder = new MediaRecorder(stream);
+      window.rec = mediaRecorder;
+      
+      mediaRecorder.onstop = (e) => {
+        const blob = new Blob(chunks, { 'type' : 'audio/webm; codecs=pcm' });
+        // window.open(URL.createObjectURL(blob));
+        // Provide to WaveSurfer
+        const audio = new Audio();
+        audio.src = URL.createObjectURL(blob);
+        wavesurfer.load( audio );
+        chunks = [];
+      }
 
-        mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
+      mediaRecorder.ondataavailable = (e) => chunks.push(e.data);
 
-      // })
-      // .catch(err => {
-      //   console.log('The following error occurred: ' + err);
-      // });
-
+      // console.groupEnd();
     }, // initRecorder()
 
-    // wavesurferAdd( audio ){
+   
+    initMicMonitor(){
+      console.log('%cinitMicMonitor():', 'color: red; font-size: 1.2rem');
 
-    //   // wavesurfer.loadBlob( audio ); // doesn't work! 
-    //   wavesurfer.load( audio );
+
+      // Make sure to use selectedInputDevice for mic monitoring too
+      const options =  { 
+        constraints: {
+          audio: { deviceId: this.selectedInputDevice } 
+        }
+      };
+      console.log('%cOPTIONS for initMicMonitor() getUserMedia()', 'color: red', options, this.audioDevices[this.selectedInputDevice]);
+
+
+      if( wavesurferMicMonitor ){
+        console.log('(destroying existing instance)');
+        wavesurferMicMonitor.microphone.destroy();
+        wavesurferMicMonitor.destroy();
+        wavesurferMicMonitor.destroyAllPlugins();
+      }
+
+      wavesurferMicMonitor = WaveSurfer.create({
+        container:     this.$refs.micMonitor, 
+        waveColor:     'orange',
+        // interact:      false,
+        // fillParent:    true,
+        // scrollParent:  false,
+        // hideScrollbar: true,
+
+        splitChannels: true,
+        
+        cursorWidth:   0,
+        plugins:       [ MicrophonePlugin.create(options) ]
+      });
+
+      window.mon = wavesurferMicMonitor;
+
+      wavesurferMicMonitor.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
+
       
-    // }, // wavesurferAdd()
+
+      // Nope! None of it works :shrug:
+      // wavesurferMicMonitor.on('audioprocess', e => {
+      //   console.log('audioprocess', e);
+      // });
+
+      // wavesurferMicMonitor.microphone.on('audioprocess', e => {
+      //   console.log('audioprocess', e);
+      // });
+
+      wavesurferMicMonitor.microphone.on('deviceReady', (stream)  => {
+        console.log('Device ready!', stream);
+
+        // Attach awkwardly to audio process event (keeping existing)
+        // const micProc = wavesurferMicMonitor.microphone.levelChecker.onaudioprocess;
+        // wavesurferMicMonitor.microphone.levelChecker.onaudioprocess = e => {
+        //   micProc(e);
+        //   console.log('proc', e);
+        // };
+
+        wavesurferMicMonitor.backend.analyser.fftSize = 64;
+
+        if( this.recordThreshold > 0 ){
+          wavesurferMicMonitor.microphone.levelChecker.addEventListener('audioprocess', e => {
+            if( this.isWaitingToRecord ){
+              for (let channel = 0; channel < e.inputBuffer.numberOfChannels; channel++) {
+                const inputData = e.inputBuffer.getChannelData(channel);
+                for (let sample = 0; sample < e.inputBuffer.length; sample++) {
+                  if( Math.abs(inputData[sample]) > this.recordThreshold ){
+                    console.log('data', inputData[sample]);
+                    this.record();
+                    return;
+                  }
+                }
+              }
+            }
+            // console.log('mic audioprocess', e.inputBuffer);
+            // processAudioBuffer(e.inputBuffer);
+            // 
+            // const bufferLength = wavesurferMicMonitor.backend.analyser.frequencyBinCount;
+            // const dataArray = new Uint8Array(bufferLength);
+            // wavesurferMicMonitor.backend.analyser.getByteTimeDomainData(dataArray);
+            // // console.log(dataArray);
+            // let debugBytes = '';
+            // for(const d of dataArray){
+            //   debugBytes = debugBytes.concat(d.toString());
+            //   debugBytes = debugBytes.concat(",");
+            // }
+            // console.log('d', debugBytes);
+
+          });
+        }
+
+      });
+      wavesurferMicMonitor.microphone.on('deviceError', function(code) {
+          console.warn('Device error: ' + code);
+      });
+
+      // console.groupEnd();
+    }, // initMicMonitor()
+
+
+
+
+
 
 
     rangeClick(e){
@@ -752,14 +1010,35 @@ let mediaRecorder = null;
       localStorage.setItem('selectedInputDevice', this.selectedInputDevice);
       this.$refs.waveform.focus();
       this.initRecorder();
+      this.initMicMonitor();
+    },
+
+    monoChanged(e){
+      const json = JSON.stringify({
+        ...this.monoDeviceMap,
+        [this.selectedInputDevice]: this.inputIsMono
+      })
+      console.log('SAVE monoDeviceMap', json, );
+      localStorage.setItem('monoDeviceMap', json);
+      this.inputChanged();
     },
 
     restoreState(){
+      
       const selected = localStorage.getItem('selectedInputDevice');
       if( selected ){
-        console.log('restore', selected);
+        // console.log('restore', selected);
         this.selectedInputDevice = selected;
       }
+
+      const monoDeviceMap = localStorage.getItem('monoDeviceMap');
+      if(monoDeviceMap){
+        this.monoDeviceMap = JSON.parse(monoDeviceMap);
+        if(this.selectedInputDevice in this.monoDeviceMap){
+          this.inputIsMono = this.monoDeviceMap[this.selectedInputDevice];
+        }
+      }
+
     },
 
 
@@ -841,7 +1120,14 @@ let mediaRecorder = null;
             // Create a Blob providing as first argument a typed array with the file buffer
             var blob = new window.Blob([new Uint8Array(ev.target.result)]);
             audio.src = URL.createObjectURL(blob);
-            const loader = wavesurfer.load(audio); 
+
+            wavesurfer.stop();
+            wavesurfer.empty();
+            wavesurfer.clearRegions();
+            
+            wavesurfer.load(audio); 
+            this.hasEverRecorded = true; 
+
             // console.log('loader', loader); // nothing
             // wavesurfer.addRegion({
             //   start: 0,
@@ -922,96 +1208,16 @@ let mediaRecorder = null;
     }, // initFileDragDrop()
 
 
-    initMicMonitor(){
 
-      wavesurferMicMonitor = WaveSurfer.create({
-        container:     this.$refs.micMonitor, //document.querySelector('#micMonitor'),
-        waveColor:     'orange',
-        interact:      false,
-        fillParent:    true,
-        scrollParent:  false,
-        hideScrollbar: true,
-        cursorWidth:   0,
-        plugins:       [ MicrophonePlugin.create() ]
-      });
-
-      window.mon = wavesurferMicMonitor;
-
-      wavesurferMicMonitor.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
-
-      
-
-      // Nope! None of it works :shrug:
-      // wavesurferMicMonitor.on('audioprocess', e => {
-      //   console.log('audioprocess', e);
-      // });
-
-      // wavesurferMicMonitor.microphone.on('audioprocess', e => {
-      //   console.log('audioprocess', e);
-      // });
-
-      wavesurferMicMonitor.microphone.on('deviceReady', (stream)  => {
-        console.log('Device ready!', stream);
-
-        // Attach awkwardly to audio process event (keeping existing)
-        // const micProc = wavesurferMicMonitor.microphone.levelChecker.onaudioprocess;
-        // wavesurferMicMonitor.microphone.levelChecker.onaudioprocess = e => {
-        //   micProc(e);
-        //   console.log('proc', e);
-        // };
-
-        wavesurferMicMonitor.backend.analyser.fftSize = 64;
-
-        if( this.recordThreshold > 0 ){
-          wavesurferMicMonitor.microphone.levelChecker.addEventListener('audioprocess', e => {
-            if( this.isWaitingToRecord ){
-              for (let channel = 0; channel < e.inputBuffer.numberOfChannels; channel++) {
-                const inputData = e.inputBuffer.getChannelData(channel);
-                for (let sample = 0; sample < e.inputBuffer.length; sample++) {
-                  if( Math.abs(inputData[sample]) > this.recordThreshold ){
-                    console.log('data', inputData[sample]);
-                    this.record();
-                    return;
-                  }
-                }
-              }
-            }
-            // console.log('mic audioprocess', e.inputBuffer);
-            // processAudioBuffer(e.inputBuffer);
-            // 
-            // const bufferLength = wavesurferMicMonitor.backend.analyser.frequencyBinCount;
-            // const dataArray = new Uint8Array(bufferLength);
-            // wavesurferMicMonitor.backend.analyser.getByteTimeDomainData(dataArray);
-            // // console.log(dataArray);
-            // let debugBytes = '';
-            // for(const d of dataArray){
-            //   debugBytes = debugBytes.concat(d.toString());
-            //   debugBytes = debugBytes.concat(",");
-            // }
-            // console.log('d', debugBytes);
-
-          });
-        }
-
-      });
-      wavesurferMicMonitor.microphone.on('deviceError', function(code) {
-          console.warn('Device error: ' + code);
-      });
-
-    
-    },
+  
 
     adjustRegion(amt, start=undefined){
       if( !this.lastRegion ) return;
       this.lastRegion.onResize(amt, start); 
     },   
 
-    // adjustRegionEnd(amt){
-    //   if( !this.lastRegion ) return;
-    //   this.lastRegion.onResize(amt); 
-    // },   
-
-
+  
+  
   }, // methods
 
 
@@ -1023,8 +1229,9 @@ function copy(region, instance){
 
     // If I don't log them out, it doesn't work?
     console.log('copy(): duration: ', segmentDuration);
-    console.log('ws', instance.backend.buffer);
-    console.log('start, end', region.start, region.end);
+    console.log('ws full buffer', instance.backend.buffer);
+    // console.log('start, end', region.start, region.end);
+
 
     var originalBuffer = instance.backend.buffer;
     var emptySegment = instance.backend.ac.createBuffer(
@@ -1033,6 +1240,7 @@ function copy(region, instance){
         originalBuffer.sampleRate
     );
     for (var i = 0; i < originalBuffer.numberOfChannels; i++) {
+        console.log('copy, channel ', i);
         var chanData = originalBuffer.getChannelData(i);
         var emptySegmentData = emptySegment.getChannelData(i);
         var mid_data = chanData.subarray( region.start * originalBuffer.sampleRate, region.end * originalBuffer.sampleRate);
@@ -1075,6 +1283,8 @@ function bufferToWave(abuffer, offset, len) {
       view = new DataView(buffer),
       channels = [], i, sample,
       pos = 0;
+
+  console.log({view});
 
   // write WAVE header
   setUint32(0x46464952);                         // "RIFF"
@@ -1293,43 +1503,58 @@ region {
   top: 0;
   left: 0;
   z-index: 200;
-  transition: 1s;
   text-align: center;
   padding: 0.4rem;
+  transition: 0.4s;
 }
 
- #inputDevices select {
+
+ #inputDevices select, #inputDevices input {
   background: black;
   color: grey;
   border: 1px solid black;
-  /* display: none; */
+  
+  padding: 0.5rem;
 }
-#inputDevices:hover select{
-  border: 1px solid grey;
-}
-
-/* #inputDevices select {
-  background: black;
-  color: white;
-  border: none;
-  display: none;
-}
-#inputDevices:hover select, #inputDevices select:hover {
-  display: block;
-  border: 1px solid grey;
-} */
-/* 
 #inputDevices label {
-  display: block;
-  text-align: center;
+  color: white;
+  padding-left: 1rem;
 }
-#inputDevices:hover label {
-  display: none;
-} */
 
-#inputDevices label span {
+#inputDevices span.select{
+  opacity: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+}
+
+#inputDevices:hover span.select {
+  /* border: 1px solid grey; */
+  opacity: 1.0;
+}
+#inputDevices:hover select {
   color: white;
 }
+/* #inputDevices select:has(option:hover){
+  opacity: 1.0;
+}
+#inputDevices select:hover){
+  opacity: 1.0;
+} */
+
+#inputDevices  span.label {
+  opacity: 1.0;
+  color: #444444;
+}
+#inputDevices:hover span.label {
+  opacity: 0;
+}
+#inputDevices span.label:hover {
+  opacity: 0;
+}
+
+
 
 #instructions {
   position: fixed;

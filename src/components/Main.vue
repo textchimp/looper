@@ -1,6 +1,8 @@
 <template>
   <div class="container">
 
+    <div v-if="testMode" class="27-10-22_10.49.28pm.full.wavWarn">TEST MODE</div>
+
     <div id="inputDevices">
       <span class="label">
         In: {{ this.selectedInputDeviceNameAbbrev }}
@@ -33,27 +35,27 @@
 
       <div v-if="!isRecording && hasEverRecorded" @click.stop="" class="rangeResetArea">
 
-        <!-- <input @click.stop="" type="range" min="0" max="20000" v-model="lowpassFilterFreq"> -->
-         <Slider v-model="lowpassFilterFreq"
-          label="gain" :min="0" :max="4" :defaultValue="1" 
-          style="height: 30px; width: 400px; margin: 0 auto;" 
-        />
+        <div id="controls">
+          <!-- <input @click.stop="" type="range" min="0" max="20000" v-model="lowpassFilterFreq"> -->
+          <Slider v-model="lowpassFilterFreq"
+            label="gain" :min="0" :max="4" :defaultValue="1" 
+            style="height: 30px; width: 400px; margin: 0 auto;" 
+          />
+          <Slider v-model="playbackRate"
+            label="rate" :min="0.13" :max="2" :defaultValue="1" 
+            style="height: 30px; width: 400px; margin: 0 auto;" 
+          />
+          <Slider v-model="stereoPan"
+            label="pan" :min="-1" :max="1" :defaultValue="0" 
+            style="height: 30px; width: 400px; margin: 0 auto;" 
+          />
+        </div><!-- #controls -->
 
-        <Slider v-model="playbackRate"
-          label="rate" :min="0.13" :max="2" :defaultValue="1" 
-          style="height: 30px; width: 400px; margin: 0 auto;" 
-        />
-        
-        
-        <Slider v-model="stereoPan"
-          label="pan" :min="-1" :max="1" :defaultValue="0" 
-          style="height: 30px; width: 400px; margin: 0 auto;" 
-        />
-      </div>
+      </div><!-- .rangeResetArea -->
     </div> 
 
     <div id="micMonitor" ref="micMonitor" 
-      :class="(isRecording || isWaitingToRecord) && 'recording'"
+      :class="((monitorOnStart || isRecording || isWaitingToRecord) && !testMode) && 'recording'"
     ></div>
 
     <div id="waveform" ref="waveform" 
@@ -92,19 +94,40 @@ const env = process.env.NODE_ENV;
 
 /*
 TODO:
+
+
+  - 1. save regions ffs... fucking STILL not working consistently - WAIT has changing the Blob type to 'audio/wav' fixed it?
+    - OfflineAudioContext? https://stackoverflow.com/a/66799384
+    - wavesurfer.exportPCM (JSON) accepts range, then back to data?
+
+
+  - 2. x2,3,..8 region range dup
+
+  - extract to components: <Wave>, <Monitor> ... state callbacks? just $emit?
+
+
+
+  - show timestamp on region handle drag, cursor click, etc
+
+  - for drag-dropped/pasted file, get correct channel count and set inputIsMono
+
+  - highlight waveform handle temporarily when adjusting using keyboard
+
   - Cloudinary upload / load?
 
   - how to handle overlapping/nested regions? causes weird loop behaviour, can't select when obscured completely, etc
 
   - arrow icons/unicode for drag handles
 
-  - Cmd+v to paste URL to load?
+  - Cmd+v to paste URL to load? WORKS, but no visible waveform unless CORS allowed - try loading into hidden <audio> tag first to get around CORS?
 
   - show friendly message/instructions if mic permission not given
 
   - sort out damn play/pause/loop of regions inconsistencies
 
   - prevent leaving region on scroll
+  - scroll to zoom weird behaviour - THROTTLE to prevent it choking the CPU
+
   - middle click to extend region? 'auxclick' event! (what about trackpad though?)
 
   NOTE: Device labels will only be shown is MediaStream is already active
@@ -158,6 +181,7 @@ const filters = {
       regionIsLooping: false,
       isRecording: false,
       isWaitingToRecord: false,
+      monitorOnStart: true,
       recordThreshold: 0.1,
       hasEverRecorded: false,
       recordClass: '',
@@ -174,6 +198,8 @@ const filters = {
       selectedInputDevice: null,
       selectedOutputDevice: {},
       inputIsMono: false,
+
+      testMode: false,
 
       keysHeld: {
         Control: false,
@@ -273,18 +299,20 @@ const filters = {
 
     this.initWavesurfer();
 
+    // Handler to load pasted URL
     document.addEventListener('paste', (e) => {
-
       const clipboardData = e.clipboardData || window.clipboardData;
       const pastedData = clipboardData.getData('Text');
-
       console.log('PASTE', pastedData);
       if(pastedData.startsWith('http')){
         wavesurfer.load( pastedData );
         this.hasEverRecorded = true; // prevent spacebar from recording
       }
-
     });
+
+    // Enable test mode from ?test= param
+    this.checkEnableTestMode();
+
 
   }, // mounted
 
@@ -320,6 +348,8 @@ const filters = {
         wavesurferMicMonitor.microphone.start();
       }
       this.isWaitingToRecord = false;
+      this.monitorOnStart = false;
+      wavesurferMicMonitor.microphone.stopDevice();
 
     },
 
@@ -331,7 +361,8 @@ const filters = {
       this.isWaitingToRecord = false;
 
       // stop the microphone
-      wavesurferMicMonitor.microphone.stop();
+      // wavesurferMicMonitor.microphone.stop();
+      wavesurferMicMonitor.microphone.stopDevice();
     },
 
 
@@ -347,7 +378,10 @@ const filters = {
         waveColor: '#A8DBA8',
         progressColor: '#3B8686',
 
-        splitChannels: true,
+        forceDecode: true, // test!
+        pixelRatio: 1,
+
+        splitChannels: true, // could be changed by this.inputIsMono
 
         fillParent: true,
         scrollParent: false,
@@ -390,6 +424,8 @@ const filters = {
         ]
       });
 
+
+      // w.setCursorColor('rgb(0,0,0,0.0)'); // to hide 
       
 
       wavesurfer.on('error', function(e) {
@@ -435,6 +471,9 @@ const filters = {
       });
 
       wavesurfer.on('ready', e => {
+
+        console.log('on READY', e);
+
         console.log('duration:', wavesurfer.getDuration() );
 
         const height = window.innerHeight / wavesurfer.backend.buffer.numberOfChannels;
@@ -487,14 +526,34 @@ const filters = {
         // });
 
 
-        wavesurfer.play(); // play once on recording end
-        // console.log( Object.values(wavesurfer.regions.list) );
+        if( !this.testMode ){
+          wavesurfer.play(); // play once on recording end
+          // console.log( Object.values(wavesurfer.regions.list) );
+        } else {
+          console.log('ws READY test mode', wavesurfer.regions.list);
+          const reg = Object.values(wavesurfer.regions.list)[0];
+          reg.play(); // play first region
+          // setTimeout( () => this.saveRegion('TEST'), 1000 );
+          
+          // 3.8s region too long, triggers error
+          // 3.1 is too long?
+
+        }
+
 
         wavesurfer.on('finish', () => {
           wavesurfer.play();  // hack for looping whole recording
         });
 
-      });  
+
+      });  // on 'ready'
+
+
+
+      // wavesurfer.on('loading', percent => {
+      //   console.log('Loading:', percent);
+      // });
+
 
       wavesurfer.on('region-click', e => {
 
@@ -515,7 +574,7 @@ const filters = {
       
       wavesurfer.on('zoom', r => {
         // console.log('zoom', r);
-        this.zoomLevel = r;
+        this.zoomLevel = r; 
       });
 
 
@@ -529,17 +588,14 @@ const filters = {
         r.element.children[0].style.opacity='0.1';
         r.element.children[1].style.width='1rem';
         r.element.children[1].style.opacity='0.1';
+
+        r.data.duration = r.end - r.start;
+        r.duplicated = 0;
+
+
       }); // on region created
-      // region-created fires as soon as you start dragging, not when finished
 
 
-
-      // wavesurfer.on('waveform-ready', r => {
-      //   console.log('waveform-ready');
-      //   const lowpass = wavesurfer.backend.ac.createBiquadFilter();
-      //   wavesurfer.backend.setFilter(lowpass);
-      //   window.lowpass = lowpass;
-      // });
 
       wavesurfer.on('region-update-end', r => {
 
@@ -547,6 +603,16 @@ const filters = {
         if( duration < 0.1 && !r.created ){
           r.remove(); // ignore new regions that are too small
           return;
+        }
+        
+        // New region, update is part of initial create drag
+        if( !r.created ){
+
+          // track original length of region (before duplicate events)
+          r.data.duration = r.end - r.start;
+          r.duplicated = 0;
+
+          r.play();  // play from start on create
         }
 
         r.created = true; // private use
@@ -558,7 +624,6 @@ const filters = {
         window.r = r;
         this.lastRegion = r;
 
-        r.play();  // playLoop?
 
         // if(wavesurfer.getCurrentTime > r.end){
         //   wavesurfer.setCurrentTime(r.start); 
@@ -638,7 +703,7 @@ const filters = {
       document.addEventListener('keypress', (e) => {
         switch( e.code ){
         case 'Space':
-          this.handleSpacebarPress();
+          this.handleSpacebarPress(e);
           break;
 
         case 'KeyP':
@@ -660,30 +725,7 @@ const filters = {
 
         case 'KeyS':
           // TODO: save active region/whole buffer
-
-          if(!this.lastRegion) return;
-          
-          const fullWave =  bufferToWave(wavesurfer.backend.buffer, 0, wavesurfer.backend.buffer.length);
-          saveFile(fullWave, dateString() + '.full.wav');
-
-          // works INTERMITTENTLY - occasional "RangeError: source array is too long"
-          // const copied = copy(this.lastRegion, wavesurfer);
-          // console.log('copied', copied);
-          // const regionWave =  bufferToWave(copied, 0, copied.length);
-          // saveFile(regionWave, dateString() + '.wav');
-
-          const rate = wavesurfer.backend.buffer.sampleRate;
-          console.log('rate', rate);
-          const wave =  bufferToWave(
-            wavesurfer.backend.buffer, 
-            // 0, wavesurfer.backend.buffer.length
-            this.lastRegion.start * rate, // offset
-            (this.lastRegion.end - this.lastRegion.start) * rate, // length
-            // (this.lastRegion.end - this.lastRegion.start)
-          );
-
-
-          
+          this.saveRegion();
           break;
 
         case 'Comma':
@@ -720,6 +762,23 @@ const filters = {
           );
             break;
 
+          
+          case 'Digit1':
+          case 'Digit2':
+          case 'Digit3':
+          case 'Digit4':
+          case 'Digit5':
+          case 'Digit6':
+          case 'Digit7':
+          case 'Digit8':
+          case 'Digit9':
+            this.extendRegion(+e.key);
+            break;
+
+          case 'Digit0':
+            wavesurfer.zoom(100);
+            wavesurfer.params.scrollParent = false;
+            break;
 
 
         default:
@@ -732,7 +791,8 @@ const filters = {
 
 
     // also used when space pressed on input select, which otherwise triggers dropdown select default behaviour
-    handleSpacebarPress(){
+    handleSpacebarPress(ev){
+      ev.preventDefault();
       if( !this.hasEverRecorded || this.isRecording ){
         // if( rec.state === 'recording' ){
         if( this.isRecording ){
@@ -843,7 +903,7 @@ const filters = {
       // TODO: this should already have been sorted out by this.getMediaDevices()
       if( this.selectedInputDevice in this.audioDevices ){
         console.log('Using selected device', this.selectedInputDeviceName);
-        options = { audio: { deviceId: this.selectedInputDevice, channelCount: 1 } };
+        options = { audio: { deviceId: this.selectedInputDevice } };
       } else {
         const firstDevice = Object.keys(this.audioDevices)[0];
         console.log('Using default (first) audio input device', firstDevice);
@@ -860,16 +920,35 @@ const filters = {
         wavesurfer.params.splitChannels = true;
       }
 
+
+      // This seems to improve the recording quality
+      // but HOW to get raw lossless PCM data instead?
+      options.audio.noiseSuppression = false;
+      options.audio.echoCancellation = false;
+
       console.log('%cOPTIONS for initRecorder() getUserMedia()', 'color: red', options, this.audioDevices[this.selectedInputDevice]);
 
       // TODO: catch errors?
       const stream = await navigator.mediaDevices.getUserMedia( options );
+      window.s = stream;
+      let tracks = stream.getAudioTracks();
+      console.log({tracks});
+      // console.log(tracks[0].getSettings().channelCount);
 
-      mediaRecorder = new MediaRecorder(stream);
+      const recorderOptions = {
+        // audioBitsPerSecond: 128000,
+
+        // NOPE: 'unsupported container'
+        // mimeType: 'audio/mp4.36', // lossless? https://developer.mozilla.org/en-US/docs/Web/Media/Formats/codecs_parameter
+
+        mimeType: 'audio/webm;codecs=opus' // is this the default anyway?
+      };
+
+      mediaRecorder = new MediaRecorder(stream, recorderOptions);
       window.rec = mediaRecorder;
       
       mediaRecorder.onstop = (e) => {
-        const blob = new Blob(chunks, { 'type' : 'audio/webm; codecs=pcm' });
+        const blob = new Blob(chunks,  { type: 'audio/wav' }); 
         // window.open(URL.createObjectURL(blob));
         // Provide to WaveSurfer
         const audio = new Audio();
@@ -907,12 +986,15 @@ const filters = {
       wavesurferMicMonitor = WaveSurfer.create({
         container:     this.$refs.micMonitor, 
         waveColor:     'orange',
+        // waveColor:     'white ',
         // interact:      false,
-        // fillParent:    true,
+        fillParent:    true,
+        responsive: true,
         // scrollParent:  false,
         // hideScrollbar: true,
 
         splitChannels: true,
+
         
         cursorWidth:   0,
         plugins:       [ MicrophonePlugin.create(options) ]
@@ -921,6 +1003,10 @@ const filters = {
       window.mon = wavesurferMicMonitor;
 
       wavesurferMicMonitor.setHeight( window.innerHeight * WAVE_HEIGHT_FACTOR );
+
+      if( this.monitorOnStart && !this.testMode ){
+        wavesurferMicMonitor.microphone.start();
+      }
 
       
 
@@ -1217,7 +1303,94 @@ const filters = {
     },   
 
   
+    checkEnableTestMode(){
+      const urlParams = new URLSearchParams(window.location.search);
+      const testMode = urlParams.get('test');
+      if( testMode === null ) return;
+      
+      this.testMode = true;
+      console.log('%cTEST MODE', 'color: green; font-size: 18pt');
+
+      // wavesurfer.load( '/CantinaBand3.wav' );
+      wavesurfer.load( '/58sec.wav' );
+      this.hasEverRecorded = true;
+      this.lastRegion = wavesurfer.addRegion({
+        // start: 0.5827633378932968,
+        // end: 2.450068399452804,
+        start: 9.8,
+        end: 38.7,
+        loop: true
+      });
+      window.r = this.lastRegion;
+
+      // Start looping this region from ws ready handler 
+
+    }, // checkEnableTestMode()
+
+
+    // https://stackoverflow.com/a/66799384 - offlineaudiocontext??
+    saveRegion(nameExt=''){
+      console.log('%csaveRegion()', 'color: green; font-weight: bold;');
+      if(!this.lastRegion) return;
+      
+      if( !this.testMode ){
+        const fullWave =  bufferToWave(wavesurfer.backend.buffer, 0, wavesurfer.backend.buffer.length);
+        saveFile(fullWave, dateString() + nameExt + '.full.wav');
+      }
+
+      let copied;
+      try {
+        // This borrowed 'copy' code occasionally throws a
+        // "RangeError: source array is too long"
+        // but if we ignore it... it works anyway?
+        // NOPE: longer regions give:
+        // "can't access property "length", copied is undefined"
+        copied = copy(this.lastRegion, wavesurfer);
+        console.log('copied', copied);
+      } catch( e ){
+        console.log('Error copying region, can we ignore?');
+      }
+      console.log({copied});
+      const regionWave =  bufferToWave(copied, 0, copied.length);
+      saveFile(regionWave, dateString() + nameExt + '.wav');
+
+      // DOES NOT WORK - "RangeError: offset is outside the bounds of the DataView"
+      // const rate = wavesurfer.backend.buffer.sampleRate;
+      // console.log('rate', rate);
+      // const wave =  bufferToWave(
+      //   wavesurfer.backend.buffer, 
+      //   // 0, wavesurfer.backend.buffer.length
+      //   this.lastRegion.start * rate, // offset
+      //   (this.lastRegion.end - this.lastRegion.start) * rate, // length
+      //   // (this.lastRegion.end - this.lastRegion.start)
+      // );
+
+    }, // saveRegion()
   
+    extendRegion( mult ){
+      console.log('%cextendRegion()', 'color:red; font-weight:bold', mult);
+      if( !this.lastRegion ) return;
+
+      const r = this.lastRegion;
+
+      if( mult === 1){
+        // special case: reset to original length
+        const timeSub = (r.end - r.start) - r.data.duration;
+        r.onResize(-timeSub);
+        r.data.duplicated = 0;
+        return;
+      }
+
+      const timeAdded = r.data.duration * (mult - 1);
+      r.onResize( timeAdded );
+      r.data.duplicated = mult;
+      
+      console.log('dur', r.data.duration);
+
+    }, // extendRegion()
+
+
+
   }, // methods
 
 
@@ -1571,6 +1744,27 @@ region {
 #instructions:hover {
   color: white;
 }
+
+.testModeWarn {
+  color: green;
+  font-size: 18pt;
+}
+
+.rangeResetArea {
+  padding: 2rem;
+  opacity: 0;
+  z-index: -1;
+  transition: 0.3s;
+}
+.rangeResetArea:hover {
+  opacity: 1;
+  transform: scale(1.5);
+}
+
+Slider{
+  border: 1px solid red;
+}
+
 </style>
 
 

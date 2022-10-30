@@ -37,7 +37,7 @@ export default {
       this.$emit('update:modelValue', this.currentValue);
     },
     modelValue(v){
-      console.log('modelValue', v);
+      // console.log('modelValue', v);
       this.percent = this.valueNorm(v);
     }
   },
@@ -92,7 +92,7 @@ export default {
     dblclick(ev){
       ev.preventDefault();
       console.log('dblclick', ev);
-      if(this.defaultValue && this.min !== undefined && this.max !== undefined){
+      if(this.defaultValue !== undefined && this.min !== undefined && this.max !== undefined){
         this.percent = this.valueNorm(this.defaultValue);
         console.log('default!');
         // this.currentValue = this.defaultValue; // need this?
@@ -122,19 +122,23 @@ export default {
   box-sizing: border-box;
   margin: 0 auto;
   width: 200px;
+  height: 100% !important;
   /* height: 50px; */
-  height: 30% !important;
+  /* height: 30% !important; */
   transition: 0.1s;
 }
-
+/* 
 .slider:hover > .outer {
   border: 1px solid grey;
   height: 100% !important;
-}
+} */
 .slider:hover .label{
   opacity: 1.0;
 }
 
+.slider{
+  padding-bottom: 1rem;
+}
 
 
 .inner {

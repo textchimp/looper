@@ -58,12 +58,16 @@
       :class="((monitorOnStart || isRecording || isWaitingToRecord) && !testMode) && 'recording'"
     ></div>
 
-    <div id="waveform" ref="waveform" 
-      @wheel="handleScrollZoom" 
-      @click="handleWaveClick"
-      @auxclick="handleMiddleClick"
+    <Wave 
+      ref="wavePlayer"
+      @stateChange="playerStateChange"
+      :inputDeviceId="selectedInputDevice"
+      :channelCount="channelCount"
       :class="isRecording && 'recording'"
-    ></div>
+    />
+    <!-- :state="waveState" -->
+    <!-- :action="waveAction" -->
+    
 
   <div id="instructions" v-if="isProduction">
     [<strong>tab</strong>]: record toggle, 
@@ -79,6 +83,7 @@
 
 
 <script>
+
 
 const MIN_ZOOM_LEVEL = 160;
 const MAX_ZOOM_LEVEL = 500;
@@ -152,13 +157,15 @@ function d(...args){
   console.log(...args);
 } // d()
 
-
 import WaveSurfer from 'wavesurfer.js';
-import RegionsPlugin from 'wavesurfer.js/dist/plugin/wavesurfer.regions.min.js';
 import MicrophonePlugin from 'wavesurfer.js/dist/plugin/wavesurfer.microphone.min.js';
+
+// import {useWavePlayerStore} from '@/stores/wavePlayer.js';
 
 // import VueSlideBar from 'vue-slide-bar';
 import Slider from './ui/Slider.vue';
+import Wave from './Wave.vue';
+
 
 // Keep these out of state?
 let wavesurfer = null;
@@ -171,7 +178,7 @@ const filters = {
 
  export default {
   name: 'Main',
-  components: { Slider },
+  components: { Slider, Wave },
   
   data(){
     return {
@@ -190,6 +197,14 @@ const filters = {
 
       lowpassFilterFreq: 0,
       stereoPan: 0, 
+
+      // <Wave> props
+      channelCount: 2,
+      waveState: 'stopped',
+      waveAction: null,
+      // waveLoad: null,
+
+      // waveStore: useWavePlayerStore(), // TODO: should the store ref be kept in state?
 
       showSplashScreen: true,
 
@@ -282,9 +297,8 @@ const filters = {
 
 
   mounted(){
-    this.restoreState();
 
-    this.initFileDragDrop();
+    this.restoreState();
 
     this.getMediaDevices();
       // triggers:
@@ -297,18 +311,10 @@ const filters = {
       this.getMediaDevices(true); // arg indicates change, not init
     };
 
-    this.initWavesurfer();
+    // this.initFileDragDrop();
+    // this.initWavesurfer();
 
-    // Handler to load pasted URL
-    document.addEventListener('paste', (e) => {
-      const clipboardData = e.clipboardData || window.clipboardData;
-      const pastedData = clipboardData.getData('Text');
-      console.log('PASTE', pastedData);
-      if(pastedData.startsWith('http')){
-        wavesurfer.load( pastedData );
-        this.hasEverRecorded = true; // prevent spacebar from recording
-      }
-    });
+    this.initKeyHandlers();
 
     // Enable test mode from ?test= param
     this.checkEnableTestMode();
@@ -323,10 +329,11 @@ const filters = {
     recordArm(){
       wavesurferMicMonitor.microphone.start();
       this.isWaitingToRecord = true;
-      wavesurfer.stop();
-      wavesurfer.empty();
-      wavesurfer.clearRegions();
+      // wavesurfer.stop();
+      // wavesurfer.empty();
+      // wavesurfer.clearRegions();
       // wavesurfer.setPlaybackRate(1);
+      this.playerAction('clear');
       this.playbackRate = 1;
     },
 
@@ -338,9 +345,12 @@ const filters = {
       
       // Started directly, not from record arm (threshold start)
       if( !this.isWaitingToRecord ){
-        wavesurfer.stop();
-        wavesurfer.empty();
-        wavesurfer.clearRegions();
+
+        // wavesurfer.stop();
+        // wavesurfer.empty();
+        // wavesurfer.clearRegions();
+        this.playerAction('clear');
+
         // wavesurfer.setPlaybackRate(1);
         this.playbackRate = 1;
         this.isRecording = true;
@@ -365,446 +375,33 @@ const filters = {
       wavesurferMicMonitor.microphone.stopDevice();
     },
 
-
    
-
-    initWavesurfer(){
-       console.log('%cinitWavesurfer():', 'color: red; font-size: 1.2rem');
-
-
-      wavesurfer = WaveSurfer.create({
-        container: this.$refs.waveform, // << slight FOUC  
-        //container: document.querySelector('#waveform'),
-        waveColor: '#A8DBA8',
-        progressColor: '#3B8686',
-
-        forceDecode: true, // test!
-        pixelRatio: 1,
-
-        splitChannels: true, // could be changed by this.inputIsMono
-
-        fillParent: true,
-        scrollParent: false,
-        hideScrollbar: false,
-        // minPxPerSec: 50,
-        // pixelRatio: 1,
-        // autocenter: true,
-
-        responsive: true,
-
-        // ISSUE: with WebAudio, 'setPlaybackRate'  actually changes rate (inc. pitch)
-        // instead of a nice time stretch...
-        backend: 'WebAudio',  // wavesurfer.backend  ??? MediaElement / WebAudio
-        // backend: 'MediaElement',  // wavesurfer.backend  ??? MediaElement / WebAudio
-        plugins: [
-            
-            // MicrophonePlugin.create(),
-
-            RegionsPlugin.create({
-                // regionsMinLength: 2,
-                // regions: [
-                //     {
-                //         start: 1,
-                //         end: 3,
-                //         loop: false,
-                //         color: 'hsla(400, 100%, 30%, 0.5)'
-                //     }, {
-                //         start: 5,
-                //         end: 7,
-                //         loop: true,
-                //         color: 'hsla(200, 50%, 70%, 0.4)',
-                //         minLength: 1,
-                //         maxLength: 5,
-                //     }
-                // ],
-                dragSelection: {
-                    slop: 5 // 5
-                }
-            })  // RegionsPlugin.create()
-        ]
-      });
-
-
-      // w.setCursorColor('rgb(0,0,0,0.0)'); // to hide 
-      
-
-      wavesurfer.on('error', function(e) {
-          console.error(e);
-      });
-
-      wavesurfer.on('waveform-ready', e => {
-        // This event is needed when using the MediaElement backend, to wait until 
-        // the buffer is defined
-        const height = window.innerHeight / wavesurfer.backend.buffer.numberOfChannels;
-        wavesurfer.setHeight( height * WAVE_HEIGHT_FACTOR );
-
-        // console.log('analyser', );
-
-        // NO! THIS IS NOT THE HANDLER CURRENTLY IN USE
-        //
-        try {
-          const gain = wavesurfer.backend.ac.createGain();
-          window.g = gain // NO
-          gain.gain.value = 0.1;
-          g.gain.setValueAtTime(0.2, wavesurfer.backend.ac.currentTime);
-          // wavesurfer.backend.setFilters(gain);
-
-          // filters.panner = w.backend.ac.createPanner();
-          // window.p = filters.panner;
-          // windows.f = filters;
-          // console.log('filter', filters);
-  
-          // panner.setPosition(Math.sin(-45 * (Math.PI / 180)), 0, 0)
-          // panner.channelCountMode = 'explicit';
-          // wavesurfer.backend.setFilters(filters.panner);
-  
-        } catch(e) {
-          console.error('Error adding filter', e);
-        }
-        // const lowpass = wavesurfer.backend.ac.createBiquadFilter();
-        // wavesurfer.setFilter(lowpass);
-        // window.l = lowpass;
-
-        // this.wavesurfer.backend.setPeaks(null); 
-        // this.wavesurfer.drawBuffer();
-
-      });
-
-      wavesurfer.on('ready', e => {
-
-        console.log('on READY', e);
-
-        console.log('duration:', wavesurfer.getDuration() );
-
-        const height = window.innerHeight / wavesurfer.backend.buffer.numberOfChannels;
-        wavesurfer.setHeight( height * WAVE_HEIGHT_FACTOR );
-
-         try {
-          const gain = wavesurfer.backend.ac.createGain();
-          window.g = gain;
-          gain.gain.value = 1;
-          filters.gain = gain;
-          // g.gain.setValueAtTime(0.2, wavesurfer.backend.ac.currentTime);
-          // wavesurfer.backend.setFilter(gain);
-
-          // const panner = w.backend.ac.createPanner();
-          // panner.setPosition(Math.sin(-45 * (Math.PI / 180)), 0, 0)
-          // panner.channelCountMode = 'explicit';
-          
-          filters.panner = w.backend.ac.createStereoPanner();
-          window.p = filters.panner;
-          filters.panner.pan.value = 0.6;
-
-          // filters.panner = w.backend.ac.createPanner();
-          // window.p = filters.panner;
-          // filters.panner.pan.value = 0; // this works!
-          
-          window.f = filters;
-          wavesurfer.backend.setFilters([
-            filters.gain,
-            filters.panner
-          ]);
-
-            // THIS WORKS
-            // const lowpass = wavesurfer.backend.ac.createBiquadFilter();
-            // wavesurfer.backend.setFilter(lowpass);
-            // window.l = lowpass;
-            
-          // console.log('filters', wavesurfer.getFilters());
-  
-        } catch(e) {
-          console.error('Error adding filter', e);
-        }
-
-        // wavesurfer.addRegion({
-        //   start: 0,
-        //   end: wavesurfer.getDuration(),
-        //   minLength: 0, 
-        //   maxLength: wavesurfer.getDuration(),
-        //   loop: true,
-        //   color: 'hsla(50, 100%, 30%, 0.5)'
-        // });
-
-
-        if( !this.testMode ){
-          wavesurfer.play(); // play once on recording end
-          // console.log( Object.values(wavesurfer.regions.list) );
-        } else {
-          console.log('ws READY test mode', wavesurfer.regions.list);
-          const reg = Object.values(wavesurfer.regions.list)[0];
-          reg.play(); // play first region
-          // setTimeout( () => this.saveRegion('TEST'), 1000 );
-          
-          // 3.8s region too long, triggers error
-          // 3.1 is too long?
-
-        }
-
-
-        wavesurfer.on('finish', () => {
-          wavesurfer.play();  // hack for looping whole recording
-        });
-
-
-      });  // on 'ready'
-
-
-
-      // wavesurfer.on('loading', percent => {
-      //   console.log('Loading:', percent);
-      // });
-
-
-      wavesurfer.on('region-click', e => {
-
-        const region = wavesurfer.regions.list[e.id];
-        
-        if( this.keysHeld.Meta ){
-          region.remove();
-          return;  
-        }
-
-        region.play();
-        region.loop = true;
-        this.regionIsLooping = true;
-        console.log('region click', region, e);
-        this.lastRegion = region;
-      });
-
-      
-      wavesurfer.on('zoom', r => {
-        // console.log('zoom', r);
-        this.zoomLevel = r; 
-      });
-
-
-      // region-created fires as soon as you start dragging, not when finished
-      wavesurfer.on('region-created', r => {
-        console.log('region-created', r);
-        console.log( Object.values(wavesurfer.regions.list) );
-        r.color = '#ff950022';
-        r.loop = true;
-        r.element.children[0].style.width='1rem';
-        r.element.children[0].style.opacity='0.1';
-        r.element.children[1].style.width='1rem';
-        r.element.children[1].style.opacity='0.1';
-
-        r.data.duration = r.end - r.start;
-        r.duplicated = 0;
-
-
-      }); // on region created
-
-
-
-      wavesurfer.on('region-update-end', r => {
-
-        const duration = r.end - r.start;
-        if( duration < 0.1 && !r.created ){
-          r.remove(); // ignore new regions that are too small
-          return;
-        }
-        
-        // New region, update is part of initial create drag
-        if( !r.created ){
-
-          // track original length of region (before duplicate events)
-          r.data.duration = r.end - r.start;
-          r.duplicated = 0;
-
-          r.play();  // play from start on create
-        }
-
-        r.created = true; // private use
-        r.loop = true;
-        this.regionIsLooping = true;
-
-        // console.log('region-update-end', r.start, r.end);
-        // console.log( Object.values(wavesurfer.regions.list) );
-        window.r = r;
-        this.lastRegion = r;
-
-
-        // if(wavesurfer.getCurrentTime > r.end){
-        //   wavesurfer.setCurrentTime(r.start); 
-        // }
-
-      }); // on region created
-
-
-      // region-play
-      // region-in
-      // region-out
-
-      wavesurfer.on('region-out', r => {
-        const region = wavesurfer.regions.list[r.id];
-        // wavesurfer.play(region);
-        // console.log('region out', region.start);
-        if( this.regionIsLooping && this.lastRegion && region.id === this.lastRegion.id ){
-          wavesurfer.setCurrentTime(region.start); //TODO: check if region has changed
-        }
-      });
-
-      window.w   = wavesurfer;
-
-
-
-      document.addEventListener('keydown', (e) => {
-        
-        this.keysHeld[e.key] = true;
-
-
-        // console.log('down', e.code);
-
-        switch( e.code ){
-        case 'Tab':
-          e.preventDefault();
-          // if( rec.state === 'recording' ){
-          if( this.isRecording ){
-            this.stopRecord();
-          } else {
-            this.record();
-          }
-          break;
-
-          case 'ArrowLeft': 
-            wavesurfer.setCurrentTime( wavesurfer.getCurrentTime() - 0.1 );
-            // wavesurfer.play();
-            break;
-
-          case 'ArrowRight': 
-            wavesurfer.setCurrentTime( wavesurfer.getCurrentTime() + 0.1 );
-            // wavesurfer.play();
-            break;
-
-          // up/down: Zoom
-          case 'ArrowUp': 
-            wavesurfer.zoom( Math.min(MAX_ZOOM_LEVEL, this.zoomLevel+50) );
-            // wavesurfer.play();
-            wavesurfer.params.scrollParent = false;
-            break;
-
-          case 'ArrowDown': 
-            wavesurfer.zoom( Math.max(MIN_ZOOM_LEVEL, this.zoomLevel-50) );
-            // wavesurfer.play();
-            wavesurfer.params.scrollParent = false;
-            break;
-
-        }
-
-      });
-
-      document.addEventListener('keyup', (e) => {
-        this.keysHeld[e.key] = false;
-      });
-
-
-
-      document.addEventListener('keypress', (e) => {
-        switch( e.code ){
-        case 'Space':
-          this.handleSpacebarPress(e);
-          break;
-
-        case 'KeyP':
-          // let region = Object.values(wavesurfer.regions.list)[0];
-          this.lastRegion?.playLoop();  // && this.lasregion.playLoop();
-          break;
-
-        case 'KeyR':
-          if( this.isRecording ) {
-            this.stopRecord();
-          } else {
-            if( this.isWaitingToRecord ){
-              this.stopRecord();
-            } else {
-              this.recordArm();
-            }
-          }
-          break;
-
-        case 'KeyS':
-          // TODO: save active region/whole buffer
-          this.saveRegion();
-          break;
-
-        case 'Comma':
-          this.playbackRate = Math.max(0.13, this.playbackRate-0.2);
-          break;
-        case 'Period':
-          this.playbackRate = Math.min(2, this.playbackRate+0.2);
-          break;
-        case 'Slash':
-          this.playbackRate = 1;
-          break;
-
-          // Loop ends adjust:
-
-          //  [ , ]  - end adjust
-          case 'BracketLeft': this.adjustRegion(
-            e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL
-          );
-            break;
-          case 'BracketRight': this.adjustRegion(
-            e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL
-          );
-            break;
-            
-          //  q, w  - start adjust
-          case 'KeyQ': this.adjustRegion(
-            e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL,
-            'start'
-          );
-            break;
-          case 'KeyW': this.adjustRegion(
-            e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL,
-            'start'
-          );
-            break;
-
-          
-          case 'Digit1':
-          case 'Digit2':
-          case 'Digit3':
-          case 'Digit4':
-          case 'Digit5':
-          case 'Digit6':
-          case 'Digit7':
-          case 'Digit8':
-          case 'Digit9':
-            this.extendRegion(+e.key);
-            break;
-
-          case 'Digit0':
-            wavesurfer.zoom(100);
-            wavesurfer.params.scrollParent = false;
-            break;
-
-
-        default:
-          console.log('Key not handled', e.code, e);          
-        }
-      });
-
-      // console.groupEnd();
-    }, // initWavesurfer()
-
-
     // also used when space pressed on input select, which otherwise triggers dropdown select default behaviour
     handleSpacebarPress(ev){
       ev.preventDefault();
-      if( !this.hasEverRecorded || this.isRecording ){
-        // if( rec.state === 'recording' ){
-        if( this.isRecording ){
-          this.stopRecord();
-        } else {
-          this.record();
-        }
+      // if( !this.hasEverRecorded || this.isRecording ){
+      //   // if( rec.state === 'recording' ){
+      //   if( this.isRecording ){
+      //     this.stopRecord();
+      //   } else {
+      //     this.record();
+      //   }
         
-        return; 
-      } // record if this is first
+      //   return; 
+      // } // record if this is first
 
-      wavesurfer.playPause();
+      // wavesurfer.playPause();
+      // this.waveAction = 'playPause';
+      console.log('SPACE playPause');
+      // This works and seems easiest for now, though
+      // "tightly coupled"
+      this.playerAction('playPause', 1, 2, 3);
+      
+      // this.waveStore.status = 'playPause'; // works, but how to trigger on update-but-not-change? same issue as prop+watch
+
+
+
+      // this.waveBus.$emit('playPause');
     },
 
 
@@ -914,10 +511,13 @@ const filters = {
 
       if( this.inputIsMono ){
         options.audio.channelCount = 1;
-        wavesurfer.params.splitChannels = false;
+        // wavesurfer.params.splitChannels = false;
+        this.channelCount = 1;
       } else {
         options.audio.channelCount = 2;
-        wavesurfer.params.splitChannels = true;
+        // wavesurfer.params.splitChannels = true;
+        this.channelCount = 2;
+
       }
 
 
@@ -949,11 +549,11 @@ const filters = {
       
       mediaRecorder.onstop = (e) => {
         const blob = new Blob(chunks,  { type: 'audio/wav' }); 
-        // window.open(URL.createObjectURL(blob));
         // Provide to WaveSurfer
         const audio = new Audio();
         audio.src = URL.createObjectURL(blob);
-        wavesurfer.load( audio );
+        // wavesurfer.load( audio );
+        this.playerAction('load', audio);
         chunks = [];
       }
 
@@ -1185,113 +785,171 @@ const filters = {
     // },
 
 
-    initFileDragDrop(){
+    initKeyHandlers(){
 
-      document.addEventListener("dragover", (event) => {
-        event.preventDefault();
-      }, false);
 
-      document.addEventListener("drop", (event) => {
-        event.preventDefault();
-        // d('item', event.dataTransfer.items[0])
-        const file =  event.dataTransfer.files[0];
+      document.addEventListener('keydown', (e) => {
+        
+        this.keysHeld[e.key] = true;
 
-        // Latest
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = (ev) => {
-            chunks = [];
-            const audio = new Audio();
-            console.log('result', ev.target.result);
-            // Create a Blob providing as first argument a typed array with the file buffer
-            var blob = new window.Blob([new Uint8Array(ev.target.result)]);
-            audio.src = URL.createObjectURL(blob);
 
-            wavesurfer.stop();
-            wavesurfer.empty();
-            wavesurfer.clearRegions();
-            
-            wavesurfer.load(audio); 
-            this.hasEverRecorded = true; 
+        // console.log('down', e.code);
 
-            // console.log('loader', loader); // nothing
-            // wavesurfer.addRegion({
-            //   start: 0,
-            //   end: wavesurfer.getDuration(),
-            //   minLength: 0, 
-            //   maxLength: wavesurfer.getDuration(),
-            //   loop: true,
-            //   color: 'hsla(50, 100%, 30%, 0.5)'
-            // });
-            //
-            // wavesurfer.loadBlob(blob); 
-            // ^^^ Error:
-            // Error decoding audiobuffer Main.vue:246:19
-            // HTTP “Content-Type” of “text/html” is not supported. Load of media resource http://localhost:5173/[object%20AudioBuffer] failed. localhost:5173
-            // Cannot play media. No decoders for requested formats: text/html
-          };
-          reader.onerror = function (evt) {
-              console.error("An error ocurred reading the file: ", evt);
-          };
+        switch( e.code ){
+        case 'Tab':
+          e.preventDefault();
+          // if( rec.state === 'recording' ){
+          if( this.isRecording ){
+            this.stopRecord();
+          } else {
+            this.record();
+          }
+          break;
 
-          // reader.readAsDataURL(file);
-           reader.readAsArrayBuffer(file);
+          case 'ArrowLeft': 
+            wavesurfer.setCurrentTime( wavesurfer.getCurrentTime() - 0.1 );
+            // wavesurfer.play();
+            break;
+
+          case 'ArrowRight': 
+            wavesurfer.setCurrentTime( wavesurfer.getCurrentTime() + 0.1 );
+            // wavesurfer.play();
+            break;
+
+          // up/down: Zoom
+          case 'ArrowUp': 
+            wavesurfer.zoom( Math.min(MAX_ZOOM_LEVEL, this.zoomLevel+50) );
+            // wavesurfer.play();
+            wavesurfer.params.scrollParent = false;
+            break;
+
+          case 'ArrowDown': 
+            wavesurfer.zoom( Math.max(MIN_ZOOM_LEVEL, this.zoomLevel-50) );
+            // wavesurfer.play();
+            wavesurfer.params.scrollParent = false;
+            break;
+
         }
 
-        // for (let i=0; i<items.length; i++) {
-        //   let item = items[i].webkitGetAsEntry(); // FF only?
-        //   if (item) {
-        //       // scanFiles(item, listing);
-        //       d(item)
-        //       // console.log(item.file());
-        //
-        //       item.file(file => {
-        //         let reader = new FileReader();
-        //         console.log('reader', file);
-        //         // wavesurfer.load(file);
-        //
-        //         reader.onload = (ev) => {
-        //
-        // FileReader.readAsArrayBuffer()
-        // Starts reading the contents of the specified Blob, once finished, the result attribute contains an ArrayBuffer representing the file's data.
-        // FileReader.readAsBinaryString()
-        // Starts reading the contents of the specified Blob, once finished, the result attribute contains the raw binary data from the file as a string.
-        // FileReader.readAsDataURL()
-        // Starts reading the contents of the specified Blob, once finished, the result attribute contains a data: URL representing the file's data.
-        // FileReader.readAsText()
-        // 
-        //           // successCallback(reader.result);
-        //           console.log('SUCCESS', reader.readyState);
-        //           const blob = new Blob([new Uint8Array(reader.result)]);
-        //           wavesurfer.loadBlob(blob);
-        //           // console.log('SUCCESS', reader.result);
-        //           // const blob = new Blob(reader.result);
-        //           // wavesurfer.loadBlob(reader.result);
-        // 
-        //           // const audio = new Audio();
-        //           // audio.src = URL.createObjectURL(blob);
-        //           // wavesurferAdd(audio);
-        //           // chunks = [];
-        //         };
-        //
-        //         reader.onerror = () => {
-        //           // errorCallback(reader.error);
-        //           console.log('ERR', reader.error);
-        //         }
-        //
-        //           // reader.readAsText(file);
-        //           // reader.readAsBinaryString(file);
-        //           reader.readAsArrayBuffer(file);
-        //
-        //       }, console.warn); // open each file dropped
-        //   }
-        // }
+      });
+
+      document.addEventListener('keyup', (e) => {
+        this.keysHeld[e.key] = false;
+      });
 
 
-      }, false); // on drop
+
+      document.addEventListener('keypress', (e) => {
+        switch( e.code ){
+        case 'Space':
+          this.handleSpacebarPress(e);
+          break;
+
+        case 'KeyP':
+          // let region = Object.values(wavesurfer.regions.list)[0];
+          this.lastRegion?.playLoop();  // && this.lasregion.playLoop();
+          break;
+
+        case 'KeyR':
+          if( this.isRecording ) {
+            this.stopRecord();
+          } else {
+            if( this.isWaitingToRecord ){
+              this.stopRecord();
+            } else {
+              this.recordArm();
+            }
+          }
+          break;
+
+        case 'KeyS':
+          // TODO: save active region/whole buffer
+          this.saveRegion();
+          break;
+
+        case 'Comma':
+          this.playbackRate = Math.max(0.13, this.playbackRate-0.2);
+          break;
+        case 'Period':
+          this.playbackRate = Math.min(2, this.playbackRate+0.2);
+          break;
+        case 'Slash':
+          this.playbackRate = 1;
+          break;
+
+          // Loop ends adjust:
+
+          //  [ , ]  - end adjust
+          case 'BracketLeft': this.adjustRegion(
+            e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL
+          );
+            break;
+          case 'BracketRight': this.adjustRegion(
+            e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL
+          );
+            break;
+            
+          //  q, w  - start adjust
+          case 'KeyQ': this.adjustRegion(
+            e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL,
+            'start'
+          );
+            break;
+          case 'KeyW': this.adjustRegion(
+            e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL,
+            'start'
+          );
+            break;
+
+          
+          case 'Digit1':
+          case 'Digit2':
+          case 'Digit3':
+          case 'Digit4':
+          case 'Digit5':
+          case 'Digit6':
+          case 'Digit7':
+          case 'Digit8':
+          case 'Digit9':
+            this.extendRegion(+e.key);
+            break;
+
+          case 'Digit0':
+            wavesurfer.zoom(100);
+            wavesurfer.params.scrollParent = false;
+            break;
 
 
-    }, // initFileDragDrop()
+        default:
+          console.log('Key not handled', e.code, e);          
+        }
+      });
+
+
+
+    },
+
+    
+    // Send actions to <Wave> player child component
+    // (which controls WaveSurfer instance)
+    playerAction(action, ...args){
+      this.$refs.wavePlayer.triggerAction(action, ...args);
+    },
+
+
+    // Receive actions from <Wave> player child
+    playerStateChange(state, ...args){
+      console.log('playerStateChange()', state, args);
+      switch(state){
+      case 'playing':
+        this.hasEverRecorded = true;
+        this.monitorOnStart = false;
+        break;
+      default:
+        console.log('%cUNHANDLED player state:', state);
+      }
+    }, // playerStateChange()
+
 
 
 
@@ -1312,16 +970,19 @@ const filters = {
       console.log('%cTEST MODE', 'color: green; font-size: 18pt');
 
       // wavesurfer.load( '/CantinaBand3.wav' );
-      wavesurfer.load( '/58sec.wav' );
+      // wavesurfer.load( '/58sec.wav' );
+      this.playerAction('load', '/58sec.wav');
       this.hasEverRecorded = true;
-      this.lastRegion = wavesurfer.addRegion({
-        // start: 0.5827633378932968,
-        // end: 2.450068399452804,
-        start: 9.8,
-        end: 38.7,
-        loop: true
-      });
-      window.r = this.lastRegion;
+      this.monitorOnStart = false;
+
+      // this.lastRegion = wavesurfer.addRegion({
+      //   // start: 0.5827633378932968,
+      //   // end: 2.450068399452804,
+      //   start: 9.8,
+      //   end: 38.7,
+      //   loop: true
+      // });
+      // window.r = this.lastRegion;
 
       // Start looping this region from ws ready handler 
 
@@ -1522,23 +1183,6 @@ function saveFile(fileURL, filename) {
   }
 }
 
-// https://stackoverflow.com/a/48968694
-function saveRangeToFile(fileURL, filename, start, end) {
-  if (window.navigator.msSaveOrOpenBlob) {
-    window.navigator.msSaveOrOpenBlob(blob, filename);
-  } else {
-    const a = document.createElement('a');
-    document.body.appendChild(a);
-    // const url = window.URL.createObjectURL(blob);
-    a.href = fileURL;
-    a.download = filename;
-    a.click();
-    setTimeout(() => {
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    }, 0)
-  }
-}
 
 // https://stackoverflow.com/questions/10645994/how-to-format-a-utc-date-as-a-yyyy-mm-dd-hhmmss-string-using-nodejs
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat/DateTimeFormat#options

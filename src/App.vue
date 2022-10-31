@@ -28,7 +28,7 @@ header {
   display: block;
   margin: 0 auto 2rem;
 }
-/* 
+/*
 @media (min-width: 1024px) {
   header {
     display: flex;

@@ -7,6 +7,8 @@ import './assets/main.css'
 
 const app = createApp(Main)
 
+console.log('pinia', createPinia);
+
 app.use(createPinia())
 
 app.mount('#app')

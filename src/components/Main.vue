@@ -20,7 +20,7 @@
             v-model="inputIsMono" 
             @change="monoChanged" 
             @keydown.space.prevent="handleSpacebarPress"
-          />Mono</label>
+          /> Mono</label>
       </span>
     </div>
 
@@ -157,6 +157,8 @@ function d(...args){
   console.log(...args);
 } // d()
 
+window.d = d; // use everywhere
+
 import WaveSurfer from 'wavesurfer.js';
 import MicrophonePlugin from 'wavesurfer.js/dist/plugin/wavesurfer.microphone.min.js';
 
@@ -260,22 +262,22 @@ const filters = {
 
   watch: {
     
-    playbackRate(v){
-      if( v > 0.13 && v < 2.7 ){
-        wavesurfer.setPlaybackRate(Number(v));
-      } 
-    },
+    // playbackRate(v){
+    //   if( v > 0.13 && v < 2.7 ){
+    //     wavesurfer.setPlaybackRate(Number(v));
+    //   } 
+    // },
 
-    lowpassFilterFreq(v){
-      console.log('lowpass', v);
-      // l.frequency.value = v;
-      g.gain.value = v;
-    },
+    // lowpassFilterFreq(v){
+    //   console.log('lowpass', v);
+    //   // l.frequency.value = v;
+    //   g.gain.value = v;
+    // },
 
-    stereoPan(v){
-      filters.panner.pan.value = v;
-      d(v);
-    },
+    // stereoPan(v){
+    //   filters.panner.pan.value = v;
+    //   d(v);
+    // },
 
     // NO! Watchers are async, which is too hard to debug
     // So instead: manually run this.initRecorder() after change to input
@@ -304,21 +306,16 @@ const filters = {
       // triggers:
       // this.initRecorder(); 
       // this.initMicMonitor();
-      //
       // .... if devices are available
 
     navigator.mediaDevices.ondevicechange = (e) => {
       this.getMediaDevices(true); // arg indicates change, not init
     };
 
-    // this.initFileDragDrop();
-    // this.initWavesurfer();
-
     this.initKeyHandlers();
 
     // Enable test mode from ?test= param
     this.checkEnableTestMode();
-
 
   }, // mounted
 
@@ -329,12 +326,8 @@ const filters = {
     recordArm(){
       wavesurferMicMonitor.microphone.start();
       this.isWaitingToRecord = true;
-      // wavesurfer.stop();
-      // wavesurfer.empty();
-      // wavesurfer.clearRegions();
-      // wavesurfer.setPlaybackRate(1);
       this.playerAction('clear');
-      this.playbackRate = 1;
+      this.playbackRate = 1; // FIXME
     },
 
     record(){
@@ -345,14 +338,8 @@ const filters = {
       
       // Started directly, not from record arm (threshold start)
       if( !this.isWaitingToRecord ){
-
-        // wavesurfer.stop();
-        // wavesurfer.empty();
-        // wavesurfer.clearRegions();
         this.playerAction('clear');
-
-        // wavesurfer.setPlaybackRate(1);
-        this.playbackRate = 1;
+        this.playbackRate = 1; // FIXME
         this.isRecording = true;
         // start the microphone
         wavesurferMicMonitor.microphone.start();
@@ -369,7 +356,6 @@ const filters = {
       this.isRecording = false;
       this.hasEverRecorded = true;
       this.isWaitingToRecord = false;
-
       // stop the microphone
       // wavesurferMicMonitor.microphone.stop();
       wavesurferMicMonitor.microphone.stopDevice();
@@ -379,28 +365,21 @@ const filters = {
     // also used when space pressed on input select, which otherwise triggers dropdown select default behaviour
     handleSpacebarPress(ev){
       ev.preventDefault();
-      // if( !this.hasEverRecorded || this.isRecording ){
-      //   // if( rec.state === 'recording' ){
-      //   if( this.isRecording ){
-      //     this.stopRecord();
-      //   } else {
-      //     this.record();
-      //   }
+      if( !this.hasEverRecorded || this.isRecording ){
+        // if( rec.state === 'recording' ){
+        if( this.isRecording ){
+          this.stopRecord();
+        } else {
+          this.record();
+        }
         
-      //   return; 
-      // } // record if this is first
+        return; 
+      } // record if this is first
 
-      // wavesurfer.playPause();
-      // this.waveAction = 'playPause';
-      console.log('SPACE playPause');
-      // This works and seems easiest for now, though
-      // "tightly coupled"
-      this.playerAction('playPause', 1, 2, 3);
+      // This works and seems easiest for now, though "tightly coupled"
+      this.playerAction('playPause');
       
       // this.waveStore.status = 'playPause'; // works, but how to trigger on update-but-not-change? same issue as prop+watch
-
-
-
       // this.waveBus.$emit('playPause');
     },
 
@@ -671,11 +650,6 @@ const filters = {
     }, // initMicMonitor()
 
 
-
-
-
-
-
     rangeClick(e){
       // d(e)
       // if( e.originalTarget.nodeName !== 'INPUT' ){
@@ -728,39 +702,12 @@ const filters = {
     },
 
 
-    handleScrollZoom(e){
-      // console.log('handleScrollZoom');    
-      // d(e);
-      wavesurfer.zoom( 
-        Math.max(MIN_ZOOM_LEVEL, 
-          Math.min(MAX_ZOOM_LEVEL, this.zoomLevel - e.deltaY)
-        )
-      );
-      wavesurfer.params.scrollParent = false;
-      //  wavesurfer.zoom( Math.max(100, this.zoomLevel-50) );
-
-    },
 
     getRegionById(id){
 
     },
 
 
-    handleWaveClick(e){
-      // d(e, e.originalTarget.nodeName)
-      if(e.originalTarget.nodeName !== 'REGION'){
-        this.regionIsLooping = false;
-      }
-    },
-
-
-    handleMiddleClick(e){
-      d(e, e.originalTarget.nodeName)
-      if(e.originalTarget.nodeName !== 'REGION'){
-        // this.regionIsLooping = false;
-        console.log('middle clicl, ');
-      }
-    },
 
 
     //  async initFileManager(){
@@ -787,13 +734,9 @@ const filters = {
 
     initKeyHandlers(){
 
-
       document.addEventListener('keydown', (e) => {
         
         this.keysHeld[e.key] = true;
-
-
-        // console.log('down', e.code);
 
         switch( e.code ){
         case 'Tab':
@@ -806,48 +749,20 @@ const filters = {
           }
           break;
 
-          case 'ArrowLeft': 
-            wavesurfer.setCurrentTime( wavesurfer.getCurrentTime() - 0.1 );
-            // wavesurfer.play();
-            break;
-
-          case 'ArrowRight': 
-            wavesurfer.setCurrentTime( wavesurfer.getCurrentTime() + 0.1 );
-            // wavesurfer.play();
-            break;
-
-          // up/down: Zoom
-          case 'ArrowUp': 
-            wavesurfer.zoom( Math.min(MAX_ZOOM_LEVEL, this.zoomLevel+50) );
-            // wavesurfer.play();
-            wavesurfer.params.scrollParent = false;
-            break;
-
-          case 'ArrowDown': 
-            wavesurfer.zoom( Math.max(MIN_ZOOM_LEVEL, this.zoomLevel-50) );
-            // wavesurfer.play();
-            wavesurfer.params.scrollParent = false;
-            break;
-
-        }
+        } // switch
 
       });
+
 
       document.addEventListener('keyup', (e) => {
         this.keysHeld[e.key] = false;
       });
 
 
-
       document.addEventListener('keypress', (e) => {
         switch( e.code ){
         case 'Space':
           this.handleSpacebarPress(e);
-          break;
-
-        case 'KeyP':
-          // let region = Object.values(wavesurfer.regions.list)[0];
-          this.lastRegion?.playLoop();  // && this.lasregion.playLoop();
           break;
 
         case 'KeyR':
@@ -862,69 +777,10 @@ const filters = {
           }
           break;
 
-        case 'KeyS':
-          // TODO: save active region/whole buffer
-          this.saveRegion();
-          break;
-
-        case 'Comma':
-          this.playbackRate = Math.max(0.13, this.playbackRate-0.2);
-          break;
-        case 'Period':
-          this.playbackRate = Math.min(2, this.playbackRate+0.2);
-          break;
-        case 'Slash':
-          this.playbackRate = 1;
-          break;
-
-          // Loop ends adjust:
-
-          //  [ , ]  - end adjust
-          case 'BracketLeft': this.adjustRegion(
-            e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL
-          );
-            break;
-          case 'BracketRight': this.adjustRegion(
-            e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL
-          );
-            break;
-            
-          //  q, w  - start adjust
-          case 'KeyQ': this.adjustRegion(
-            e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL,
-            'start'
-          );
-            break;
-          case 'KeyW': this.adjustRegion(
-            e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL,
-            'start'
-          );
-            break;
-
-          
-          case 'Digit1':
-          case 'Digit2':
-          case 'Digit3':
-          case 'Digit4':
-          case 'Digit5':
-          case 'Digit6':
-          case 'Digit7':
-          case 'Digit8':
-          case 'Digit9':
-            this.extendRegion(+e.key);
-            break;
-
-          case 'Digit0':
-            wavesurfer.zoom(100);
-            wavesurfer.params.scrollParent = false;
-            break;
-
-
         default:
           console.log('Key not handled', e.code, e);          
         }
       });
-
 
 
     },
@@ -939,7 +795,7 @@ const filters = {
 
     // Receive actions from <Wave> player child
     playerStateChange(state, ...args){
-      console.log('playerStateChange()', state, args);
+      console.log('MAIN received playerStateChange()', state, args);
       switch(state){
       case 'playing':
         this.hasEverRecorded = true;
@@ -951,16 +807,6 @@ const filters = {
     }, // playerStateChange()
 
 
-
-
-  
-
-    adjustRegion(amt, start=undefined){
-      if( !this.lastRegion ) return;
-      this.lastRegion.onResize(amt, start); 
-    },   
-
-  
     checkEnableTestMode(){
       const urlParams = new URLSearchParams(window.location.search);
       const testMode = urlParams.get('test');
@@ -989,212 +835,14 @@ const filters = {
     }, // checkEnableTestMode()
 
 
-    // https://stackoverflow.com/a/66799384 - offlineaudiocontext??
-    saveRegion(nameExt=''){
-      console.log('%csaveRegion()', 'color: green; font-weight: bold;');
-      if(!this.lastRegion) return;
-      
-      if( !this.testMode ){
-        const fullWave =  bufferToWave(wavesurfer.backend.buffer, 0, wavesurfer.backend.buffer.length);
-        saveFile(fullWave, dateString() + nameExt + '.full.wav');
-      }
-
-      let copied;
-      try {
-        // This borrowed 'copy' code occasionally throws a
-        // "RangeError: source array is too long"
-        // but if we ignore it... it works anyway?
-        // NOPE: longer regions give:
-        // "can't access property "length", copied is undefined"
-        copied = copy(this.lastRegion, wavesurfer);
-        console.log('copied', copied);
-      } catch( e ){
-        console.log('Error copying region, can we ignore?');
-      }
-      console.log({copied});
-      const regionWave =  bufferToWave(copied, 0, copied.length);
-      saveFile(regionWave, dateString() + nameExt + '.wav');
-
-      // DOES NOT WORK - "RangeError: offset is outside the bounds of the DataView"
-      // const rate = wavesurfer.backend.buffer.sampleRate;
-      // console.log('rate', rate);
-      // const wave =  bufferToWave(
-      //   wavesurfer.backend.buffer, 
-      //   // 0, wavesurfer.backend.buffer.length
-      //   this.lastRegion.start * rate, // offset
-      //   (this.lastRegion.end - this.lastRegion.start) * rate, // length
-      //   // (this.lastRegion.end - this.lastRegion.start)
-      // );
-
-    }, // saveRegion()
-  
-    extendRegion( mult ){
-      console.log('%cextendRegion()', 'color:red; font-weight:bold', mult);
-      if( !this.lastRegion ) return;
-
-      const r = this.lastRegion;
-
-      if( mult === 1){
-        // special case: reset to original length
-        const timeSub = (r.end - r.start) - r.data.duration;
-        r.onResize(-timeSub);
-        r.data.duplicated = 0;
-        return;
-      }
-
-      const timeAdded = r.data.duration * (mult - 1);
-      r.onResize( timeAdded );
-      r.data.duplicated = mult;
-      
-      console.log('dur', r.data.duration);
-
-    }, // extendRegion()
-
 
 
   }, // methods
 
 
-}
-
-// https://stackoverflow.com/a/55932619
-function copy(region, instance){
-    var segmentDuration = region.end - region.start
-
-    // If I don't log them out, it doesn't work?
-    console.log('copy(): duration: ', segmentDuration);
-    console.log('ws full buffer', instance.backend.buffer);
-    // console.log('start, end', region.start, region.end);
+}; // Vue component
 
 
-    var originalBuffer = instance.backend.buffer;
-    var emptySegment = instance.backend.ac.createBuffer(
-        originalBuffer.numberOfChannels,
-        segmentDuration * originalBuffer.sampleRate,
-        originalBuffer.sampleRate
-    );
-    for (var i = 0; i < originalBuffer.numberOfChannels; i++) {
-        console.log('copy, channel ', i);
-        var chanData = originalBuffer.getChannelData(i);
-        var emptySegmentData = emptySegment.getChannelData(i);
-        var mid_data = chanData.subarray( region.start * originalBuffer.sampleRate, region.end * originalBuffer.sampleRate);
-        emptySegmentData.set(mid_data);
-    }
-
-    return emptySegment
-}
-
-
-function processAudioBuffer(buf){
- for (let channel = 0; channel < buf.numberOfChannels; channel++) {
-    const inputData = buf.getChannelData(channel);
-    // const outputData = outputBuffer.getChannelData(channel);
-    // Loop through the 4096 samples
-    for (let sample = 0; sample < buf.length; sample++) {
-      // make output equal to the same as the input
-      // outputData[sample] = inputData[sample];
-      // add noise to each output sample
-      // outputData[sample] += ((Math.random() * 2) - 1) * 0.2;
-      
-      if( Math.abs(inputData[sample]) > 0.3 ){
-        console.log('data', inputData[sample]);
-      }
-
-
-    }
-  }
-
-}
-
-// https://stackoverflow.com/a/62260599
-// (C) Ken Fyrstenberg / MIT license
-// TODO: format is hardcoded 16bit 44khz?
-function bufferToWave(abuffer, offset, len) {
-
-  var numOfChan = abuffer.numberOfChannels,
-      length = len * numOfChan * 2 + 44,
-      buffer = new ArrayBuffer(length),
-      view = new DataView(buffer),
-      channels = [], i, sample,
-      pos = 0;
-
-  console.log({view});
-
-  // write WAVE header
-  setUint32(0x46464952);                         // "RIFF"
-  setUint32(length - 8);                         // file length - 8
-  setUint32(0x45564157);                         // "WAVE"
-
-  setUint32(0x20746d66);                         // "fmt " chunk
-  setUint32(16);                                 // length = 16
-  setUint16(1);                                  // PCM (uncompressed)
-  setUint16(numOfChan);
-  setUint32(abuffer.sampleRate);
-  setUint32(abuffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
-  setUint16(numOfChan * 2);                      // block-align
-  setUint16(16);                                 // 16-bit (hardcoded in this demo)
-
-  setUint32(0x61746164);                         // "data" - chunk
-  setUint32(length - pos - 4);                   // chunk length
-
-  // write interleaved data
-  for(i = 0; i < abuffer.numberOfChannels; i++)
-    channels.push(abuffer.getChannelData(i));
-
-  while(pos < length) {
-    for(i = 0; i < numOfChan; i++) {             // interleave channels
-      sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
-      sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767)|0; // scale to 16-bit signed int
-      view.setInt16(pos, sample, true);          // update data chunk
-      pos += 2;
-    }
-    offset++                                     // next source sample
-  }
-
-  // create Blob
-  return (URL || webkitURL).createObjectURL(new Blob([buffer], {type: "audio/wav"}));
-
-  function setUint16(data) {
-    view.setUint16(pos, data, true);
-    pos += 2;
-  }
-
-  function setUint32(data) {
-    view.setUint32(pos, data, true);
-    pos += 4;
-  }
-}
-
-// https://stackoverflow.com/a/48968694
-function saveFile(fileURL, filename) {
-  if (window.navigator.msSaveOrOpenBlob) {
-    window.navigator.msSaveOrOpenBlob(blob, filename);
-  } else {
-    const a = document.createElement('a');
-    document.body.appendChild(a);
-    // const url = window.URL.createObjectURL(blob);
-    a.href = fileURL;
-    a.download = filename;
-    a.click();
-    setTimeout(() => {
-      window.URL.revokeObjectURL(fileURL);
-      document.body.removeChild(a);
-    }, 0)
-  }
-}
-
-
-// https://stackoverflow.com/questions/10645994/how-to-format-a-utc-date-as-a-yyyy-mm-dd-hhmmss-string-using-nodejs
-// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat/DateTimeFormat#options
-function dateString(){
-  // return new Date().toISOString().replace('T', '_').replace(':', '.').replace(/\..+/, '');
-  return new Date()
-    .toLocaleString('default', { dateStyle: 'short', timeStyle: 'medium' })
-    .replaceAll('/', '-') // ugh
-    .replace(', ', '_')
-    .replaceAll(':', '.')
-    .replaceAll(' ', '');
-}
 
 </script>
 

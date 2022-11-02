@@ -13,6 +13,7 @@
     "pinia": "^2.0.23",
     "vue": "^3.2.41",
     "vue-slide-bar": "^1.2.0",
+    "wavesurfer-zoom-to-mouse-plugin": "^1.0.4",
     "wavesurfer.js": "^6.3.0"
   },
   "devDependencies": {

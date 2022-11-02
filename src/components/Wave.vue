@@ -1,8 +1,8 @@
 <template>
   <div>
     <!-- action: {{ waveStore.status }} -->
+      <!-- @wheel="handleScrollZoom"  -->
     <div id="waveform" ref="waveform" 
-      @wheel="handleScrollZoom" 
       @click="handleWaveClick"
       @auxclick="handleMiddleClick"
       :class="isRecording && 'recording'"
@@ -11,6 +11,17 @@
 </template>
 
 <script>
+/*
+  TODO:
+
+  - 'pause' ws event triggering every region loop iteration, WHY? (Not for initial default looping of whole wave, though)
+
+  - doubled up on `keysHeld` handler and data
+
+  - ZoomToMouse package works, but still zooms to cursor during playback - how to prevent?
+    - wavesurfer.params.autoCenter = false;   but then never follows playing cursor... how to re-center once?
+
+*/
 
 const MIN_ZOOM_LEVEL = 160;
 const MAX_ZOOM_LEVEL = 500;
@@ -28,6 +39,7 @@ const env = process.env.NODE_ENV;
 
 import WaveSurfer from 'wavesurfer.js';
 import RegionsPlugin from 'wavesurfer.js/dist/plugin/wavesurfer.regions.min.js';
+import ZoomToMousePlugin from "wavesurfer-zoom-to-mouse-plugin";
 
 // import {useWavePlayerStore} from '@/stores/wavePlayer.js';
 
@@ -39,7 +51,7 @@ const filters = {};
 export default {
   name: 'Wave',
   // components: { Slider },
-  props: [ 'inputDeviceId', 'channelCount', 'state', 'load', 'bus' ],
+  props: [ 'inputDeviceId', 'channelCount' ],
   data(){
     return {
       // STATE
@@ -211,7 +223,7 @@ export default {
 
 
       wavesurfer = WaveSurfer.create({
-        container: this.$refs.waveform, // << slight FOUC  
+        container: this.$refs.waveform,
         waveColor: '#A8DBA8',
         progressColor: '#3B8686',
 
@@ -225,7 +237,8 @@ export default {
         hideScrollbar: false,
         // minPxPerSec: 50,
         // pixelRatio: 1,
-        // autocenter: true,
+        
+        // autoCenter: false,
 
         responsive: true,
 
@@ -233,11 +246,16 @@ export default {
         // instead of a nice time stretch...
         backend: 'WebAudio',  // wavesurfer.backend  ??? MediaElement / WebAudio
         plugins: [
-            RegionsPlugin.create({
-                dragSelection: {
-                    slop: 5 // 5
-                }
-            })  // RegionsPlugin.create()
+          RegionsPlugin.create({
+              dragSelection: {
+                  slop: 5 // 5
+              }
+          }),  // RegionsPlugin.create()
+
+          // TODO: works, but still zooms to cursor during playback - how to prevent?
+          ZoomToMousePlugin.create({
+            maxPxPerSec: 5000 // default 1000
+          }),
         ]
       });
 
@@ -470,13 +488,17 @@ export default {
       //   this.stateEmit('playing');
       // });
 
-      wavesurfer.on('pause', e => {
-        this.stateEmit('paused');
-      });
+      // TODO: ALSO triggering every region loop iteration, not sure why?
+      // wavesurfer.on('pause', e => {
+      //   console.log('ws PAUSE event');
+      //   this.stateEmit('paused');
+      // });
 
       window.w   = wavesurfer;
     
     }, // initWavesurfer()
+
+
 
 
      initFileDragDrop(){
@@ -535,56 +557,6 @@ export default {
            reader.readAsArrayBuffer(file);
         }
 
-        // for (let i=0; i<items.length; i++) {
-        //   let item = items[i].webkitGetAsEntry(); // FF only?
-        //   if (item) {
-        //       // scanFiles(item, listing);
-        //       d(item)
-        //       // console.log(item.file());
-        //
-        //       item.file(file => {
-        //         let reader = new FileReader();
-        //         console.log('reader', file);
-        //         // wavesurfer.load(file);
-        //
-        //         reader.onload = (ev) => {
-        //
-        // FileReader.readAsArrayBuffer()
-        // Starts reading the contents of the specified Blob, once finished, the result attribute contains an ArrayBuffer representing the file's data.
-        // FileReader.readAsBinaryString()
-        // Starts reading the contents of the specified Blob, once finished, the result attribute contains the raw binary data from the file as a string.
-        // FileReader.readAsDataURL()
-        // Starts reading the contents of the specified Blob, once finished, the result attribute contains a data: URL representing the file's data.
-        // FileReader.readAsText()
-        // 
-        //           // successCallback(reader.result);
-        //           console.log('SUCCESS', reader.readyState);
-        //           const blob = new Blob([new Uint8Array(reader.result)]);
-        //           wavesurfer.loadBlob(blob);
-        //           // console.log('SUCCESS', reader.result);
-        //           // const blob = new Blob(reader.result);
-        //           // wavesurfer.loadBlob(reader.result);
-        // 
-        //           // const audio = new Audio();
-        //           // audio.src = URL.createObjectURL(blob);
-        //           // wavesurferAdd(audio);
-        //           // chunks = [];
-        //         };
-        //
-        //         reader.onerror = () => {
-        //           // errorCallback(reader.error);
-        //           console.log('ERR', reader.error);
-        //         }
-        //
-        //           // reader.readAsText(file);
-        //           // reader.readAsBinaryString(file);
-        //           reader.readAsArrayBuffer(file);
-        //
-        //       }, console.warn); // open each file dropped
-        //   }
-        // }
-
-
       }, false); // on drop
 
 
@@ -600,6 +572,9 @@ export default {
         // console.log('down', e.code);
 
         switch( e.code ){
+        
+        // Handled in MAIN
+        //
         // case 'Tab':
         //   e.preventDefault();
         //   // if( rec.state === 'recording' ){
@@ -637,100 +612,173 @@ export default {
 
       });
 
+
       document.addEventListener('keyup', (e) => {
         this.keysHeld[e.key] = false;
       });
 
 
+      document.addEventListener('keypress', (e) => {
+        switch( e.code ){
 
-      // document.addEventListener('keypress', (e) => {
-      //   switch( e.code ){
-      //   case 'Space':
-      //     this.handleSpacebarPress(e);
-      //     break;
+        case 'KeyP':
+          // let region = Object.values(wavesurfer.regions.list)[0];
+          this.lastRegion?.playLoop();  // && this.lasregion.playLoop();
+          break;
 
-      //   case 'KeyP':
-      //     // let region = Object.values(wavesurfer.regions.list)[0];
-      //     this.lastRegion?.playLoop();  // && this.lasregion.playLoop();
-      //     break;
+        case 'KeyS':
+          // TODO: save active region/whole buffer
+          this.saveRegion('.region');
+          break;
 
-      //   case 'KeyR':
-      //     if( this.isRecording ) {
-      //       this.stopRecord();
-      //     } else {
-      //       if( this.isWaitingToRecord ){
-      //         this.stopRecord();
-      //       } else {
-      //         this.recordArm();
-      //       }
-      //     }
-      //     break;
+        case 'Comma':
+          this.playbackRate = Math.max(0.13, this.playbackRate-0.2);
+          break;
+        case 'Period':
+          this.playbackRate = Math.min(2, this.playbackRate+0.2);
+          break;
+        case 'Slash':
+          this.playbackRate = 1;
+          break;
 
-      //   case 'KeyS':
-      //     // TODO: save active region/whole buffer
-      //     this.saveRegion();
-      //     break;
+        // Loop ends adjust:
 
-      //   case 'Comma':
-      //     this.playbackRate = Math.max(0.13, this.playbackRate-0.2);
-      //     break;
-      //   case 'Period':
-      //     this.playbackRate = Math.min(2, this.playbackRate+0.2);
-      //     break;
-      //   case 'Slash':
-      //     this.playbackRate = 1;
-      //     break;
-
-      //     // Loop ends adjust:
-
-      //     //  [ , ]  - end adjust
-      //     case 'BracketLeft': this.adjustRegion(
-      //       e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL
-      //     );
-      //       break;
-      //     case 'BracketRight': this.adjustRegion(
-      //       e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL
-      //     );
-      //       break;
-            
-      //     //  q, w  - start adjust
-      //     case 'KeyQ': this.adjustRegion(
-      //       e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL,
-      //       'start'
-      //     );
-      //       break;
-      //     case 'KeyW': this.adjustRegion(
-      //       e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL,
-      //       'start'
-      //     );
-      //       break;
+        //  [ , ]  - end adjust
+        case 'BracketLeft': this.adjustRegion(
+          e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL
+        );
+          break;
+        case 'BracketRight': this.adjustRegion(
+          e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL
+        );
+          break;
+          
+        //  q, w  - start adjust
+        case 'KeyQ': this.adjustRegion(
+          e.shiftKey ? -REGION_RESIZE_MEDIUM : -REGION_RESIZE_SMALL,
+          'start'
+        );
+          break;
+        case 'KeyW': this.adjustRegion(
+          e.shiftKey ? REGION_RESIZE_MEDIUM : REGION_RESIZE_SMALL,
+          'start'
+        );
+          break;
 
           
-      //     case 'Digit1':
-      //     case 'Digit2':
-      //     case 'Digit3':
-      //     case 'Digit4':
-      //     case 'Digit5':
-      //     case 'Digit6':
-      //     case 'Digit7':
-      //     case 'Digit8':
-      //     case 'Digit9':
-      //       this.extendRegion(+e.key);
-      //       break;
+          case 'Digit1':
+          case 'Digit2':
+          case 'Digit3':
+          case 'Digit4':
+          case 'Digit5':
+          case 'Digit6':
+          case 'Digit7':
+          case 'Digit8':
+          case 'Digit9':
+            this.extendRegion(+e.key);
+            break;
 
-      //     case 'Digit0':
-      //       wavesurfer.zoom(100);
-      //       wavesurfer.params.scrollParent = false;
-      //       break;
+          case 'Digit0':
+            wavesurfer.zoom(100);
+            wavesurfer.params.scrollParent = false;
+            break;
 
 
-      //   default:
-      //     console.log('Key not handled', e.code, e);          
-      //   }
-      // });
+        default:
+          console.log('Key not handled', e.code, e);          
+        }
+      });
 
 
     }, // initKeyHandlers()
+
+
+    adjustRegion(amt, start=undefined){
+      if( !this.lastRegion ) return;
+      this.lastRegion.onResize(amt, start); 
+    },   
+
+
+    extendRegion( mult ){
+      console.log('%cextendRegion()', 'color:red; font-weight:bold', mult);
+      if( !this.lastRegion ) return;
+
+      const r = this.lastRegion;
+
+      if( mult === 1){
+        // special case: reset to original length
+        const timeSub = (r.end - r.start) - r.data.duration;
+        r.onResize(-timeSub);
+        r.data.duplicated = 0;
+        return;
+      }
+
+      const timeAdded = r.data.duration * (mult - 1);
+      r.onResize( timeAdded );
+      r.data.duplicated = mult;
+      
+      console.log('dur', r.data.duration);
+
+    }, // extendRegion()
+
+
+
+    handleWaveClick(e){
+      // d(e, e.originalTarget.nodeName)
+      if(e.originalTarget.nodeName !== 'REGION'){
+        this.regionIsLooping = false;
+      }
+    },
+
+
+    handleMiddleClick(e){
+      d(e, e.originalTarget.nodeName)
+      if(e.originalTarget.nodeName !== 'REGION'){
+        // this.regionIsLooping = false;
+        console.log('middle clicl, ');
+      }
+    },
+
+
+    handleScrollZoom(e){
+      // console.log('handleScrollZoom');    
+      // d(e);
+      wavesurfer.zoom( 
+        Math.max(MIN_ZOOM_LEVEL, 
+          Math.min(MAX_ZOOM_LEVEL, this.zoomLevel - e.deltaY)
+        )
+      );
+      wavesurfer.params.scrollParent = false;
+      //  wavesurfer.zoom( Math.max(100, this.zoomLevel-50) );
+
+    },
+
+
+    // https://stackoverflow.com/a/66799384 - offlineaudiocontext??
+    saveRegion(nameExt=''){
+      console.log('%csaveRegion()', 'color: green; font-weight: bold;');
+      if(!this.lastRegion) return;
+      
+      // if( !this.testMode ){
+      //   const fullWave =  bufferToWave(wavesurfer.backend.buffer, 0, wavesurfer.backend.buffer.length);
+      //   saveFile(fullWave, dateString() + nameExt + '.full.wav');
+      // }
+
+      const slice = bufferSlice(
+        wavesurfer.backend.buffer, 
+        wavesurfer.backend.ac, 
+        this.lastRegion.start, 
+        this.lastRegion.end 
+      );
+
+      const duration = (this.lastRegion.end - this.lastRegion.start).toFixed(2);
+
+      const regionWave =  bufferToWave(slice, 0, slice.length);
+      saveFile(regionWave, dateString() + nameExt + '-' + duration + 'sec.wav');
+
+    }, // saveRegion()
+
+
 
 
 
@@ -772,7 +820,155 @@ export default {
 
   }, // methods
 
+}; // Vue component
+
+
+
+
+// Adapted from https://miguelmota.com/bytes/slice-audiobuffer/
+function bufferSlice(buffer, audioContext, begin, end){
+  if (begin < 0) {
+    throw new RangeError('begin time must be greater than 0');
+  }
+  if (end > duration) {
+    throw new RangeError('end time must be less than or equal to ' + duration);
+  }
+
+  var duration = buffer.duration;
+  var channels = buffer.numberOfChannels;
+  var rate = buffer.sampleRate;
+  var startOffset = rate * begin;
+  var endOffset = rate * end;
+  var frameCount = endOffset - startOffset;
+  
+  var newArrayBuffer = audioContext.createBuffer(channels, frameCount, rate);
+  var anotherArray = new Float32Array(frameCount);
+  var offset = 0;
+
+  for (var channel = 0; channel < channels; channel++) {
+    buffer.copyFromChannel(anotherArray, channel, startOffset);
+    newArrayBuffer.copyToChannel(anotherArray, channel, offset);
+  }
+
+  return newArrayBuffer;
 }
+
+
+
+// https://stackoverflow.com/a/62260599
+// (C) Ken Fyrstenberg / MIT license
+// TODO: format is hardcoded 16bit 44khz?
+function bufferToWave(abuffer, offset, len) {
+
+  var numOfChan = abuffer.numberOfChannels,
+      length = len * numOfChan * 2 + 44,
+      buffer = new ArrayBuffer(length),
+      view = new DataView(buffer),
+      channels = [], i, sample,
+      pos = 0;
+
+  console.log({view});
+
+  // write WAVE header
+  setUint32(0x46464952);                         // "RIFF"
+  setUint32(length - 8);                         // file length - 8
+  setUint32(0x45564157);                         // "WAVE"
+
+  setUint32(0x20746d66);                         // "fmt " chunk
+  setUint32(16);                                 // length = 16
+  setUint16(1);                                  // PCM (uncompressed)
+  setUint16(numOfChan);
+  setUint32(abuffer.sampleRate);
+  setUint32(abuffer.sampleRate * 2 * numOfChan); // avg. bytes/sec
+  setUint16(numOfChan * 2);                      // block-align
+  setUint16(16);                                 // 16-bit (hardcoded in this demo)
+
+  setUint32(0x61746164);                         // "data" - chunk
+  setUint32(length - pos - 4);                   // chunk length
+
+  // write interleaved data
+  for(i = 0; i < abuffer.numberOfChannels; i++)
+    channels.push(abuffer.getChannelData(i));
+
+  while(pos < length) {
+    for(i = 0; i < numOfChan; i++) {             // interleave channels
+      sample = Math.max(-1, Math.min(1, channels[i][offset])); // clamp
+      sample = (0.5 + sample < 0 ? sample * 32768 : sample * 32767)|0; // scale to 16-bit signed int
+      view.setInt16(pos, sample, true);          // update data chunk
+      pos += 2;
+    }
+    offset++                                     // next source sample
+  }
+
+  // create Blob
+  return (URL || webkitURL).createObjectURL(new Blob([buffer], {type: "audio/wav"}));
+
+  function setUint16(data) {
+    view.setUint16(pos, data, true);
+    pos += 2;
+  }
+
+  function setUint32(data) {
+    view.setUint32(pos, data, true);
+    pos += 4;
+  }
+}
+
+// https://stackoverflow.com/a/48968694
+function saveFile(fileURL, filename) {
+  if (window.navigator.msSaveOrOpenBlob) {
+    window.navigator.msSaveOrOpenBlob(blob, filename);
+  } else {
+    const a = document.createElement('a');
+    document.body.appendChild(a);
+    // const url = window.URL.createObjectURL(blob);
+    a.href = fileURL;
+    a.download = filename;
+    a.click();
+    setTimeout(() => {
+      window.URL.revokeObjectURL(fileURL);
+      document.body.removeChild(a);
+    }, 0)
+  }
+}
+
+
+// https://stackoverflow.com/questions/10645994/how-to-format-a-utc-date-as-a-yyyy-mm-dd-hhmmss-string-using-nodejs
+// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat/DateTimeFormat#options
+function dateString(){
+  // return new Date().toISOString().replace('T', '_').replace(':', '.').replace(/\..+/, '');
+  return new Date()
+    .toLocaleString('default', { dateStyle: 'short', timeStyle: 'medium' })
+    .replaceAll('/', '-') // ugh
+    .replace(', ', '_')
+    .replaceAll(':', '.')
+    .replaceAll(' ', '');
+}
+
+
+
+function processAudioBuffer(buf){
+ for (let channel = 0; channel < buf.numberOfChannels; channel++) {
+    const inputData = buf.getChannelData(channel);
+    // const outputData = outputBuffer.getChannelData(channel);
+    // Loop through the 4096 samples
+    for (let sample = 0; sample < buf.length; sample++) {
+      // make output equal to the same as the input
+      // outputData[sample] = inputData[sample];
+      // add noise to each output sample
+      // outputData[sample] += ((Math.random() * 2) - 1) * 0.2;
+      
+      if( Math.abs(inputData[sample]) > 0.3 ){
+        console.log('data', inputData[sample]);
+      }
+
+
+    }
+  }
+
+}
+
+
 </script>
 
 <style>
